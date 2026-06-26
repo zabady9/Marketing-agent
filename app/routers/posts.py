@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -6,9 +6,10 @@ from app.database import get_db
 from app.models.enums import PostStatus
 from app.models.post import Post
 from app.schemas.plan import PostResponse
-from app.schemas.post import PostEditRequest, RejectRequest
+from app.schemas.post import PostEditRequest, RegenerateRequest, RejectRequest
 from app.services.action_log import log_action
 from app.services.post_status import InvalidTransition, transition
+from app.services.regenerate import regenerate_post
 
 router = APIRouter(prefix="/posts", tags=["posts"])
 
@@ -89,4 +90,17 @@ async def edit_post(
     )
     await db.commit()
     await db.refresh(post)
+    return post
+
+
+@router.post("/{post_id}:regenerate", response_model=PostResponse, status_code=202)
+async def regenerate(
+    post_id: str,
+    background_tasks: BackgroundTasks,
+    body: RegenerateRequest | None = Body(default=None),
+    db: AsyncSession = Depends(get_db),
+):
+    post = await _get_post_or_404(db, post_id)
+    note = body.note if body else None
+    background_tasks.add_task(regenerate_post, post_id=post_id, note=note)
     return post

@@ -9,3 +9,7 @@ class PostEditRequest(BaseModel):
     content: str | None = None
     hashtags: list[str] | None = None
     suggested_time: str | None = None
+
+
+class RegenerateRequest(BaseModel):
+    note: str | None = None
