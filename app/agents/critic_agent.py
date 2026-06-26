@@ -1,13 +1,8 @@
-import anthropic
-
-from app.config import settings
+from app.agents.llm import get_llm
 
 
 class CriticAgent:
-    """Critic and analytics agent — uses claude-haiku-4-5-20251001."""
+    """Critic and analytics agent — uses cheap model (gemini-2.5-flash)."""
 
     def __init__(self) -> None:
-        self._client = anthropic.AsyncAnthropic(
-            api_key=settings.anthropic_api_key.get_secret_value()
-        )
-        self._model = settings.critic_model
+        self._llm = get_llm("cheap")

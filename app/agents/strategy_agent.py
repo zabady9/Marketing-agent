@@ -1,13 +1,8 @@
-import anthropic
-
-from app.config import settings
+from app.agents.llm import get_llm
 
 
 class StrategyAgent:
-    """Strategy and content generation agent — uses claude-sonnet-4-6."""
+    """Strategy and content generation agent — uses reasoning model (gemini-2.5-pro)."""
 
     def __init__(self) -> None:
-        self._client = anthropic.AsyncAnthropic(
-            api_key=settings.anthropic_api_key.get_secret_value()
-        )
-        self._model = settings.strategy_model
+        self._llm = get_llm("reasoning")
