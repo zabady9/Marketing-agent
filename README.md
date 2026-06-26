@@ -104,7 +104,7 @@ Decision deferred to Phase 4.
 |---|---|---|
 | 1 — Foundation | **Done** | FastAPI + Docker + Postiz + PostizClient |
 | 2 — First agent | **Done** | Gemini + LangGraph + brand endpoints + draft generation |
-| 3 — Approval gate | Pending | Status machine + approve/reject/schedule |
+| 3 — Approval gate | **Done** | Status machine + approve/reject/edit/regenerate/schedule |
 | 4 — The loop | Pending | Analytics → feed next plan |
 
 ## LangGraph generation flow (Phase 2)
@@ -158,16 +158,44 @@ LANGSMITH_PROJECT=marketing-agent
 When enabled, every `graph.ainvoke` call produces a trace at smith.langchain.com.
 Leave `LANGSMITH_TRACING=false` (default) for local dev and all tests.
 
-## Phase 2 API
+## API reference
 
 ```
-POST /api/workspaces                      — create workspace
-GET  /api/workspaces/{id}                 — fetch workspace
-PUT  /api/workspaces/{id}/brand           — upsert brand profile
-GET  /api/workspaces/{id}/brand           — fetch brand profile
-POST /api/workspaces/{id}/plans:generate  — start generation (202, background)
-GET  /api/workspaces/{id}/plans/{plan_id} — poll status + posts
+POST /api/workspaces                              — create workspace
+GET  /api/workspaces/{id}                         — fetch workspace
+PUT  /api/workspaces/{id}/brand                   — upsert brand profile
+GET  /api/workspaces/{id}/brand                   — fetch brand profile
+POST /api/workspaces/{id}/plans:generate          — start generation (202, background)
+GET  /api/workspaces/{id}/plans/{plan_id}         — poll status + posts
+GET  /api/workspaces/{id}/connections             — list Postiz integrations
+
+POST /api/posts/{id}:approve                      — pending_approval → approved
+POST /api/posts/{id}:reject                       — → rejected (optional {"reason": "..."})
+PATCH /api/posts/{id}                             — edit content/hashtags/suggested_time
+                                                    (approved → pending_approval on edit)
+POST /api/posts/{id}:regenerate                   — rewrite via AI (202, optional {"note": "..."})
+POST /api/posts/{id}:schedule                     — approved → scheduled via Postiz
+                                                    body: {integration_id, provider, when}
 ```
 
-Posts land in `pending_approval` — **nothing is published**. Phase 3 adds the
-approve / reject / schedule workflow and Postiz integration.
+## Post status machine
+
+```
+draft ──────────────────────────────► pending_approval
+                                            │
+                              ┌─────────────┴──────────────┐
+                              ▼                            ▼
+                           approved                     rejected
+                              │
+                 ┌────────────┼────────────┐
+                 ▼            ▼            ▼
+          pending_approval  scheduled   rejected
+                              │
+                              ▼
+                           published
+```
+
+- Editing an **approved** post resets it to **pending_approval**.
+- Regenerating an **approved** post resets it to **pending_approval**.
+- `POST /posts/{id}:schedule` is only allowed from **approved**.
+- Publishing (`scheduled → published`) is driven by Postiz; not a direct API call.
