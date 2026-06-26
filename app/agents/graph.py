@@ -1,0 +1,151 @@
+from typing import TypedDict
+
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, StateGraph
+
+from app.agents.content_agent import ContentAgent
+from app.agents.critic_agent import CriticAgent
+from app.agents.schemas import ContentIdea, ContentOutput, StrategyOutput
+from app.agents.strategy_agent import StrategyAgent
+
+
+class GraphState(TypedDict):
+    brand_profile: dict
+    goal: str | None
+    ideas: list[dict]            # ContentIdea model_dump() dicts
+    current_idx: int             # index of the idea currently being worked on
+    revision_count: int          # reset to 0 each time we start a new idea; max 1
+    current_content: dict | None # ContentOutput model_dump() dict
+    finished_posts: list[dict]   # accumulated results (ContentOutput + idea metadata)
+    action_logs: list[dict]      # accumulated log entries; written to DB by run_generation
+    workspace_id: str
+    plan_id: str
+
+
+_strategy_agent = StrategyAgent()
+_content_agent = ContentAgent()
+_critic_agent = CriticAgent()
+
+
+async def strategy_node(state: GraphState) -> dict:
+    brand_profile = state["brand_profile"]
+    goal = state["goal"]
+
+    output: StrategyOutput = await _strategy_agent.generate(brand_profile, goal)
+    ideas = [idea.model_dump() for idea in output.ideas]
+
+    log = {
+        "actor": "strategy_node",
+        "action": "generate_ideas",
+        "payload": {"goal": goal},
+        "result": {"idea_count": len(ideas)},
+    }
+    return {
+        "ideas": ideas,
+        "current_idx": 0,
+        "revision_count": 0,
+        "action_logs": state.get("action_logs", []) + [log],
+    }
+
+
+async def content_node(state: GraphState) -> dict:
+    idx = state["current_idx"]
+    idea_dict = state["ideas"][idx]
+    idea = ContentIdea(**idea_dict)
+    brand_profile = state["brand_profile"]
+
+    # On revision, the critic sets current_content to the fixed_body text;
+    # use that as a revision hint rather than starting from scratch.
+    revision_hint: str | None = None
+    if state["revision_count"] > 0 and state.get("current_content"):
+        revision_hint = state["current_content"].get("content")
+
+    output: ContentOutput = await _content_agent.write(idea, brand_profile, revision_hint)
+    content_dict = output.model_dump()
+
+    log = {
+        "actor": "content_node",
+        "action": "write_post",
+        "payload": {"idea": idea_dict, "revision": state["revision_count"]},
+        "result": {"content_length": len(output.content)},
+    }
+    return {
+        "current_content": content_dict,
+        "action_logs": state.get("action_logs", []) + [log],
+    }
+
+
+async def critic_node(state: GraphState) -> dict:
+    content_dict = state["current_content"]
+    content = ContentOutput(**content_dict)
+    brand_profile = state["brand_profile"]
+
+    from app.agents.schemas import CriticOutput
+    output: CriticOutput = await _critic_agent.review(content, brand_profile)
+
+    log = {
+        "actor": "critic_node",
+        "action": "review_post",
+        "payload": {"approved": output.approved, "issues": output.issues},
+        "result": {"fixed_body_provided": output.fixed_body is not None},
+    }
+
+    updates: dict = {"action_logs": state.get("action_logs", []) + [log]}
+
+    if not output.approved and state["revision_count"] == 0 and output.fixed_body:
+        # Apply critic's fix and signal one revision
+        updates["current_content"] = {**content_dict, "content": output.fixed_body}
+        updates["revision_count"] = 1
+    else:
+        # Build the finished post record: content + idea metadata
+        idx = state["current_idx"]
+        idea_dict = state["ideas"][idx]
+        finished = {**content_dict, **idea_dict}
+        updates["finished_posts"] = state.get("finished_posts", []) + [finished]
+
+    return updates
+
+
+def advance_node(state: GraphState) -> dict:
+    return {
+        "current_idx": state["current_idx"] + 1,
+        "revision_count": 0,
+        "current_content": None,
+    }
+
+
+def _after_critic(state: GraphState) -> str:
+    """Route: re-run content if revision needed, else advance."""
+    if state["revision_count"] == 1 and len(state.get("finished_posts", [])) == state["current_idx"]:
+        # critic just set revision_count=1 and did NOT append to finished_posts
+        return "content"
+    return "advance"
+
+
+def _after_advance(state: GraphState) -> str:
+    """Route: next idea or end."""
+    if state["current_idx"] < len(state.get("ideas", [])):
+        return "content"
+    return END
+
+
+def build_graph() -> StateGraph:
+    builder = StateGraph(GraphState)
+
+    builder.add_node("strategy", strategy_node)
+    builder.add_node("content", content_node)
+    builder.add_node("critic", critic_node)
+    builder.add_node("advance", advance_node)
+
+    builder.set_entry_point("strategy")
+    builder.add_edge("strategy", "content")
+    builder.add_edge("content", "critic")
+    builder.add_conditional_edges("critic", _after_critic, {"content": "content", "advance": "advance"})
+    builder.add_conditional_edges("advance", _after_advance, {"content": "content", END: END})
+
+    # Phase 3: swap MemorySaver for a Postgres checkpointer to support
+    # durable human-in-the-loop interrupts that survive restarts.
+    return builder.compile(checkpointer=MemorySaver())
+
+
+generation_graph = build_graph()
