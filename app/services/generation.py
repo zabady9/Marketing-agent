@@ -7,6 +7,7 @@ from app.models.action_log import ActionLog
 from app.models.content_plan import ContentPlan
 from app.models.enums import PlanStatus
 from app.models.post import Post
+from app.services import event_bus
 
 
 async def run_generation(
@@ -19,6 +20,7 @@ async def run_generation(
     """Background task: invoke the LangGraph workflow then persist results."""
     async with session_factory() as db:
         try:
+            await event_bus.emit(plan_id, {"type": "status", "message": "Starting generation…"})
             initial_state = {
                 "brand_profile": brand_profile,
                 "goal": goal,
@@ -71,8 +73,10 @@ async def run_generation(
 
             plan.status = PlanStatus.ready.value
             await db.commit()
+            await event_bus.emit(plan_id, {"type": "done", "plan_id": plan_id})
 
         except Exception as exc:
+            await event_bus.emit(plan_id, {"type": "error", "message": str(exc)})
             async with session_factory() as err_db:
                 result = await err_db.execute(
                     select(ContentPlan).where(ContentPlan.id == plan_id)
@@ -82,3 +86,5 @@ async def run_generation(
                     plan.status = PlanStatus.failed.value
                     plan.error = str(exc)
                     await err_db.commit()
+        finally:
+            event_bus.close(plan_id)

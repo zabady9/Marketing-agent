@@ -7,6 +7,7 @@ from app.agents.content_agent import ContentAgent
 from app.agents.critic_agent import CriticAgent
 from app.agents.schemas import ContentIdea, ContentOutput, StrategyOutput
 from app.agents.strategy_agent import StrategyAgent
+from app.services import event_bus
 
 
 class GraphState(TypedDict):
@@ -28,11 +29,19 @@ _critic_agent = CriticAgent()
 
 
 async def strategy_node(state: GraphState) -> dict:
+    plan_id = state["plan_id"]
     brand_profile = state["brand_profile"]
     goal = state["goal"]
 
+    await event_bus.emit(plan_id, {"type": "status", "message": "Generating content strategy…"})
+
     output: StrategyOutput = await _strategy_agent.generate(brand_profile, goal)
     ideas = [idea.model_dump() for idea in output.ideas]
+
+    await event_bus.emit(plan_id, {
+        "type": "strategy_done",
+        "ideas": [{"day": i["day"], "theme": i["theme"], "format": i["format"]} for i in ideas],
+    })
 
     log = {
         "actor": "strategy_node",
@@ -49,19 +58,35 @@ async def strategy_node(state: GraphState) -> dict:
 
 
 async def content_node(state: GraphState) -> dict:
+    plan_id = state["plan_id"]
     idx = state["current_idx"]
     idea_dict = state["ideas"][idx]
     idea = ContentIdea(**idea_dict)
     brand_profile = state["brand_profile"]
 
-    # On revision, the critic sets current_content to the fixed_body text;
-    # use that as a revision hint rather than starting from scratch.
     revision_hint: str | None = None
     if state["revision_count"] > 0 and state.get("current_content"):
         revision_hint = state["current_content"].get("content")
 
+    label = "Rewriting" if revision_hint else "Writing"
+    await event_bus.emit(plan_id, {
+        "type": "post_start",
+        "day": idea.day,
+        "theme": idea.theme,
+        "format": idea.format,
+        "message": f"{label} Day {idea.day}: {idea.theme}…",
+    })
+
     output: ContentOutput = await _content_agent.write(idea, brand_profile, revision_hint)
     content_dict = output.model_dump()
+
+    await event_bus.emit(plan_id, {
+        "type": "post_written",
+        "day": idea.day,
+        "content": output.content,
+        "hashtags": output.hashtags,
+        "suggested_time": output.suggested_time,
+    })
 
     log = {
         "actor": "content_node",
@@ -76,9 +101,18 @@ async def content_node(state: GraphState) -> dict:
 
 
 async def critic_node(state: GraphState) -> dict:
+    plan_id = state["plan_id"]
     content_dict = state["current_content"]
     content = ContentOutput(**content_dict)
     brand_profile = state["brand_profile"]
+    idx = state["current_idx"]
+    idea_dict = state["ideas"][idx]
+
+    await event_bus.emit(plan_id, {
+        "type": "critic_start",
+        "day": idea_dict["day"],
+        "message": f"Reviewing Day {idea_dict['day']}…",
+    })
 
     from app.agents.schemas import CriticOutput
     output: CriticOutput = await _critic_agent.review(content, brand_profile)
@@ -93,15 +127,26 @@ async def critic_node(state: GraphState) -> dict:
     updates: dict = {"action_logs": state.get("action_logs", []) + [log]}
 
     if not output.approved and state["revision_count"] == 0 and output.fixed_body:
-        # Apply critic's fix and signal one revision
+        await event_bus.emit(plan_id, {
+            "type": "critic_revision",
+            "day": idea_dict["day"],
+            "issues": output.issues,
+            "message": f"Day {idea_dict['day']} needs revision — rewriting…",
+        })
         updates["current_content"] = {**content_dict, "content": output.fixed_body}
         updates["revision_count"] = 1
     else:
-        # Build the finished post record: content + idea metadata
-        idx = state["current_idx"]
-        idea_dict = state["ideas"][idx]
         finished = {**content_dict, **idea_dict}
         updates["finished_posts"] = state.get("finished_posts", []) + [finished]
+        await event_bus.emit(plan_id, {
+            "type": "post_approved",
+            "day": idea_dict["day"],
+            "theme": idea_dict["theme"],
+            "content": content_dict["content"],
+            "hashtags": content_dict.get("hashtags", []),
+            "suggested_time": content_dict.get("suggested_time", ""),
+            "message": f"Day {idea_dict['day']} approved ✓",
+        })
 
     return updates
 
