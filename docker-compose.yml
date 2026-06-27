@@ -111,6 +111,18 @@ services:
       timeout: 3s
       retries: 5
 
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: marketing-frontend
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:5173"
+    environment:
+      VITE_API_URL: "http://localhost:8001"
+    networks: [marketing-net]
+
 networks:
   marketing-net:
     driver: bridge
