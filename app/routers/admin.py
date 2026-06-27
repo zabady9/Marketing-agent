@@ -1,15 +1,30 @@
+import secrets
+
 from pydantic import BaseModel, ConfigDict
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Security
+from fastapi.security import APIKeyHeader
 from sqlalchemy import func, select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import get_db
 from app.models.action_log import ActionLog
 from app.models.content_plan import ContentPlan
 from app.models.post import Post
 from app.models.workspace import Workspace
 
-router = APIRouter(prefix="/admin", tags=["admin"])
+_admin_key_header = APIKeyHeader(name="X-Admin-Key", auto_error=False)
+
+
+def require_admin_key(key: str | None = Security(_admin_key_header)) -> None:
+    configured = settings.admin_api_key.get_secret_value()
+    if not configured:
+        raise HTTPException(status_code=503, detail="Admin API key not configured on server")
+    if not key or not secrets.compare_digest(key, configured):
+        raise HTTPException(status_code=401, detail="Invalid or missing X-Admin-Key header")
+
+
+router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_admin_key)])
 
 
 # ── Schemas ────────────────────────────────────────────────────────────────────

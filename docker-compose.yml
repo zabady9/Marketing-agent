@@ -121,6 +121,7 @@ services:
       - "127.0.0.1:3000:5173"
     environment:
       VITE_API_URL: "http://localhost:8001"
+      VITE_ADMIN_API_KEY: "${ADMIN_API_KEY}"
     networks: [marketing-net]
 
 networks:

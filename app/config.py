@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     langsmith_api_key: SecretStr | None = None
     langsmith_project: str = "marketing-agent"
 
+    # Admin
+    admin_api_key: SecretStr = Field(default=SecretStr(""))
+
     # Postiz
     postiz_api_url: str = "http://postiz:5000"
     postiz_api_key: SecretStr = Field(default=SecretStr("placeholder"))
