@@ -82,21 +82,27 @@ async def list_plans(
     )
     plans = result.scalars().all()
 
-    out = []
-    for plan in plans:
+    posts_by_plan: dict[str, list] = {p.id: [] for p in plans}
+    if plans:
+        plan_ids = [p.id for p in plans]
         posts_result = await db.execute(
-            select(Post).where(Post.plan_id == plan.id).order_by(Post.day)
+            select(Post).where(Post.plan_id.in_(plan_ids)).order_by(Post.plan_id, Post.day)
         )
-        out.append(PlanResponse(
+        for post in posts_result.scalars().all():
+            posts_by_plan[post.plan_id].append(post)
+
+    return [
+        PlanResponse(
             id=plan.id,
             workspace_id=plan.workspace_id,
             goal=plan.goal,
             status=plan.status,
             error=plan.error,
-            posts=list(posts_result.scalars().all()),
+            posts=posts_by_plan[plan.id],
             created_at=str(plan.created_at),
-        ))
-    return out
+        )
+        for plan in plans
+    ]
 
 
 @router.get("/{workspace_id}/plans/{plan_id}", response_model=PlanResponse)
