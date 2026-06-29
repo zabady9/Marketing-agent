@@ -1,3 +1,5 @@
+import logging
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -8,6 +10,8 @@ from app.models.content_plan import ContentPlan
 from app.models.enums import PlanStatus
 from app.models.post import Post
 from app.services import event_bus
+
+logger = logging.getLogger(__name__)
 
 
 async def run_generation(
@@ -76,7 +80,8 @@ async def run_generation(
             await event_bus.emit(plan_id, {"type": "done", "plan_id": plan_id})
 
         except Exception as exc:
-            await event_bus.emit(plan_id, {"type": "error", "message": str(exc)})
+            logger.exception("Generation failed for plan %s", plan_id)
+            await event_bus.emit(plan_id, {"type": "error", "message": "Generation failed. Check server logs for details."})
             async with session_factory() as err_db:
                 result = await err_db.execute(
                     select(ContentPlan).where(ContentPlan.id == plan_id)
@@ -84,7 +89,7 @@ async def run_generation(
                 plan = result.scalar_one_or_none()
                 if plan:
                     plan.status = PlanStatus.failed.value
-                    plan.error = str(exc)
+                    plan.error = type(exc).__name__
                     await err_db.commit()
         finally:
             event_bus.close(plan_id)
