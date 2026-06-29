@@ -7,7 +7,7 @@ from app.database import AsyncSessionLocal
 from app.models.enums import PostStatus
 from app.models.post import Post
 from app.services.action_log import log_action
-from app.services.brand_profile import get_brand_profile
+from app.services.brand_profile import brand_profile_to_dict, get_brand_profile
 from app.services.post_status import transition
 
 
@@ -24,18 +24,7 @@ async def regenerate_post(
             return
 
         bp = await get_brand_profile(db, post.workspace_id)
-        brand_profile = (
-            {
-                "name": bp.name,
-                "audience": bp.audience,
-                "tone": bp.tone,
-                "language": bp.language,
-                "avoid": bp.avoid or [],
-                "extra": bp.extra or {},
-            }
-            if bp
-            else {}
-        )
+        brand_profile = brand_profile_to_dict(bp)
 
         idea = ContentIdea(
             day=post.day,

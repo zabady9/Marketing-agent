@@ -90,6 +90,17 @@ class AdminLog(BaseModel):
     created_at: str
 
 
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+async def _fetch_workspace_names(db: AsyncSession, ids: list[str]) -> dict[str, str]:
+    if not ids:
+        return {}
+    rows = (await db.execute(
+        select(Workspace.id, Workspace.name).where(Workspace.id.in_(ids))
+    )).all()
+    return {r[0]: r[1] for r in rows}
+
+
 # ── Endpoints ──────────────────────────────────────────────────────────────────
 
 @router.get("/stats", response_model=StatsResponse)
@@ -151,12 +162,7 @@ async def list_all_plans(db: AsyncSession = Depends(get_db)):
     )).scalars().all()
 
     ws_ids = list({p.workspace_id for p in plans})
-    ws_map: dict[str, str] = {}
-    if ws_ids:
-        rows = (await db.execute(
-            select(Workspace.id, Workspace.name).where(Workspace.id.in_(ws_ids))
-        )).all()
-        ws_map = {r[0]: r[1] for r in rows}
+    ws_map = await _fetch_workspace_names(db, ws_ids)
 
     post_counts = {}
     if plans:
@@ -199,12 +205,7 @@ async def list_all_posts(status: str | None = None, db: AsyncSession = Depends(g
     posts = (await db.execute(q)).scalars().all()
 
     ws_ids = list({p.workspace_id for p in posts})
-    ws_map: dict[str, str] = {}
-    if ws_ids:
-        rows = (await db.execute(
-            select(Workspace.id, Workspace.name).where(Workspace.id.in_(ws_ids))
-        )).all()
-        ws_map = {r[0]: r[1] for r in rows}
+    ws_map = await _fetch_workspace_names(db, ws_ids)
 
     return [
         AdminPost(

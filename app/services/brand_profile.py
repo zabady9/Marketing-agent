@@ -6,6 +6,19 @@ from app.schemas.brand_profile import BrandProfileUpsert
 from app.services.action_log import log_action
 
 
+def brand_profile_to_dict(bp: BrandProfile | None) -> dict:
+    if bp is None:
+        return {}
+    return {
+        "name": bp.name,
+        "audience": bp.audience,
+        "tone": bp.tone,
+        "language": bp.language,
+        "avoid": bp.avoid or [],
+        "extra": bp.extra or {},
+    }
+
+
 async def upsert_brand_profile(
     db: AsyncSession, workspace_id: str, data: BrandProfileUpsert
 ) -> BrandProfile:

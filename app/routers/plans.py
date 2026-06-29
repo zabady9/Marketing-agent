@@ -11,7 +11,7 @@ from app.models.enums import PlanStatus
 from app.models.post import Post
 from app.schemas.plan import PlanCreateRequest, PlanResponse
 from app.services import event_bus
-from app.services.brand_profile import get_brand_profile
+from app.services.brand_profile import get_brand_profile, brand_profile_to_dict
 from app.services.generation import run_generation
 from app.services.workspace import get_workspace
 
@@ -42,14 +42,7 @@ async def generate_plan(
     await db.commit()
     await db.refresh(plan)
 
-    brand_dict = {
-        "name": bp.name,
-        "audience": bp.audience,
-        "tone": bp.tone,
-        "language": bp.language,
-        "avoid": bp.avoid or [],
-        "extra": bp.extra or {},
-    }
+    brand_dict = brand_profile_to_dict(bp)
 
     # Create the event queue before the background task so SSE can connect immediately
     event_bus.create(plan.id)
