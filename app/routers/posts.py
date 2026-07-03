@@ -110,6 +110,33 @@ async def regenerate(
     return post
 
 
+@router.post("/{post_id}:submit", response_model=PostResponse)
+async def submit_draft(post_id: str, db: AsyncSession = Depends(get_db)):
+    post = await _get_post_or_404(db, post_id)
+    try:
+        transition(post, PostStatus.pending_approval)
+    except InvalidTransition as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    await log_action(
+        db, post.workspace_id, "api", "submit_draft", {"post_id": post_id}
+    )
+    await db.commit()
+    await db.refresh(post)
+    return post
+
+
+@router.delete("/{post_id}", status_code=204)
+async def delete_draft_post(post_id: str, db: AsyncSession = Depends(get_db)):
+    post = await _get_post_or_404(db, post_id)
+    if post.status != PostStatus.draft.value:
+        raise HTTPException(status_code=409, detail="Only draft posts can be deleted")
+    await log_action(
+        db, post.workspace_id, "api", "delete_draft_post", {"post_id": post_id}
+    )
+    await db.delete(post)
+    await db.commit()
+
+
 @router.post("/{post_id}:schedule", response_model=PostResponse)
 async def schedule(
     post_id: str,
