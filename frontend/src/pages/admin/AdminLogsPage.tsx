@@ -32,22 +32,22 @@ export default function AdminLogsPage() {
 
   return (
     <div>
-      <h1 className="text-xl font-bold text-gray-900 mb-6">Action Logs</h1>
+      <h1 className="text-xl font-bold text-gray-900 mb-6">سجلات الإجراءات</h1>
 
       <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-gray-100 bg-gray-50 text-xs text-gray-500 uppercase tracking-wide">
-              <th className="px-5 py-3 text-left">Time</th>
-              <th className="px-5 py-3 text-left">Action</th>
-              <th className="px-5 py-3 text-left">Actor</th>
-              <th className="px-5 py-3 text-left">Workspace</th>
-              <th className="px-5 py-3 text-left">Details</th>
+              <th className="px-5 py-3 text-right">الوقت</th>
+              <th className="px-5 py-3 text-right">الإجراء</th>
+              <th className="px-5 py-3 text-right">المنفِّذ</th>
+              <th className="px-5 py-3 text-right">مساحة العمل</th>
+              <th className="px-5 py-3 text-right">التفاصيل</th>
             </tr>
           </thead>
           <tbody>
             {logs.length === 0 && !loading && (
-              <tr><td colSpan={5} className="px-5 py-8 text-center text-gray-400">No logs yet</td></tr>
+              <tr><td colSpan={5} className="px-5 py-8 text-center text-gray-400">لا توجد سجلات بعد</td></tr>
             )}
             {logs.map(log => (
               <>
@@ -56,17 +56,17 @@ export default function AdminLogsPage() {
                   className="border-b border-gray-50 hover:bg-gray-50 cursor-pointer transition-colors"
                   onClick={() => setExpanded(expanded === log.id ? null : log.id)}
                 >
-                  <td className="px-5 py-2.5 text-gray-400 text-xs whitespace-nowrap">
-                    {new Date(log.created_at).toLocaleString()}
+                  <td className="px-5 py-2.5 text-gray-400 text-xs whitespace-nowrap text-right">
+                    {new Date(log.created_at).toLocaleString('ar-SA')}
                   </td>
-                  <td className="px-5 py-2.5">
+                  <td className="px-5 py-2.5 text-right">
                     <span className={`font-mono text-xs font-medium ${ACTION_COLOR[log.action] ?? 'text-gray-700'}`}>
                       {log.action}
                     </span>
                   </td>
-                  <td className="px-5 py-2.5 text-gray-500 text-xs">{log.actor}</td>
-                  <td className="px-5 py-2.5 text-gray-400 font-mono text-xs">{log.workspace_id.slice(0, 8)}…</td>
-                  <td className="px-5 py-2.5 text-gray-400 text-xs">
+                  <td className="px-5 py-2.5 text-gray-500 text-xs text-right">{log.actor}</td>
+                  <td className="px-5 py-2.5 text-gray-400 font-mono text-xs text-right">{log.workspace_id.slice(0, 8)}…</td>
+                  <td className="px-5 py-2.5 text-gray-400 text-xs text-right">
                     {Object.keys(log.payload).slice(0, 2).map(k => `${k}: ${String(log.payload[k]).slice(0, 20)}`).join(' · ')}
                   </td>
                 </tr>
@@ -75,14 +75,14 @@ export default function AdminLogsPage() {
                     <td colSpan={5} className="px-5 py-3">
                       <div className="grid grid-cols-2 gap-4">
                         <div>
-                          <p className="text-xs font-semibold text-gray-500 mb-1">Payload</p>
+                          <p className="text-xs font-semibold text-gray-500 mb-1 text-right">البيانات</p>
                           <pre className="text-xs text-gray-700 bg-white border border-gray-200 rounded p-2 overflow-auto max-h-40">
                             {JSON.stringify(log.payload, null, 2)}
                           </pre>
                         </div>
                         {log.result && (
                           <div>
-                            <p className="text-xs font-semibold text-gray-500 mb-1">Result</p>
+                            <p className="text-xs font-semibold text-gray-500 mb-1 text-right">النتيجة</p>
                             <pre className="text-xs text-gray-700 bg-white border border-gray-200 rounded p-2 overflow-auto max-h-40">
                               {JSON.stringify(log.result, null, 2)}
                             </pre>
@@ -97,7 +97,7 @@ export default function AdminLogsPage() {
           </tbody>
         </table>
 
-        {loading && <div className="px-5 py-4 text-center text-gray-400 text-sm">Loading…</div>}
+        {loading && <div className="px-5 py-4 text-center text-gray-400 text-sm">جارٍ التحميل…</div>}
 
         {!loading && logs.length >= limit && (
           <div className="px-5 py-4 border-t border-gray-100 text-center">
@@ -105,7 +105,7 @@ export default function AdminLogsPage() {
               onClick={() => { const next = offset + limit; setOffset(next); load(next) }}
               className="text-sm text-indigo-600 hover:text-indigo-800 font-medium transition-colors"
             >
-              Load more
+              تحميل المزيد
             </button>
           </div>
         )}

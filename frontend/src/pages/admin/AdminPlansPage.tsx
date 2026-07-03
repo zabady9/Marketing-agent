@@ -8,6 +8,12 @@ const STATUS_COLOR: Record<string, string> = {
   failed: 'bg-red-100 text-red-700',
 }
 
+const STATUS_LABEL: Record<string, string> = {
+  generating: 'جارٍ التوليد',
+  ready: 'جاهز',
+  failed: 'فشل',
+}
+
 export default function AdminPlansPage() {
   const [rows, setRows] = useState<AdminPlan[]>([])
   const [loading, setLoading] = useState(true)
@@ -42,7 +48,7 @@ export default function AdminPlansPage() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm('Delete this plan and all its posts?')) return
+    if (!confirm('حذف هذه الخطة وجميع منشوراتها؟')) return
     setDeleting(id)
     try {
       await adminDeletePlan(id)
@@ -54,7 +60,7 @@ export default function AdminPlansPage() {
   }
 
   async function handleBulkDelete() {
-    if (!confirm(`Delete ${selected.size} plan(s) and all their posts?`)) return
+    if (!confirm(`حذف ${selected.size} خطة وجميع منشوراتها؟`)) return
     setBulkDeleting(true)
     const ids = Array.from(selected)
     await Promise.allSettled(ids.map(id => adminDeletePlan(id)))
@@ -63,7 +69,7 @@ export default function AdminPlansPage() {
     setBulkDeleting(false)
   }
 
-  if (loading) return <div className="text-gray-400 text-sm">Loading…</div>
+  if (loading) return <div className="text-gray-400 text-sm">جارٍ التحميل…</div>
 
   const visibleIds = filtered.map(r => r.id)
   const allChecked = visibleIds.length > 0 && visibleIds.every(id => selected.has(id))
@@ -72,30 +78,30 @@ export default function AdminPlansPage() {
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-xl font-bold text-gray-900">Plans <span className="text-gray-400 font-normal text-base">({filtered.length})</span></h1>
         <div className="flex items-center gap-3">
+          <select value={filter} onChange={e => setFilter(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            <option value="all">جميع الحالات</option>
+            <option value="generating">جارٍ التوليد</option>
+            <option value="ready">جاهز</option>
+            <option value="failed">فشل</option>
+          </select>
           {selected.size > 0 && (
             <button
               onClick={handleBulkDelete}
               disabled={bulkDeleting}
               className="bg-red-500 hover:bg-red-600 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
             >
-              {bulkDeleting ? 'Deleting…' : `Delete ${selected.size} selected`}
+              {bulkDeleting ? 'جارٍ الحذف…' : `حذف ${selected.size} مختار`}
             </button>
           )}
-          <select value={filter} onChange={e => setFilter(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
-            <option value="all">All statuses</option>
-            <option value="generating">Generating</option>
-            <option value="ready">Ready</option>
-            <option value="failed">Failed</option>
-          </select>
         </div>
+        <h1 className="text-xl font-bold text-gray-900">الخطط <span className="text-gray-400 font-normal text-base">({filtered.length})</span></h1>
       </div>
       <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-gray-100 bg-gray-50 text-xs text-gray-500 uppercase tracking-wide">
-              <th className="pl-5 pr-3 py-3 w-10">
+              <th className="pr-5 pl-3 py-3 w-10">
                 <input
                   type="checkbox"
                   checked={allChecked}
@@ -104,21 +110,21 @@ export default function AdminPlansPage() {
                   className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
                 />
               </th>
-              <th className="px-3 py-3 text-left">Workspace</th>
-              <th className="px-3 py-3 text-left">Goal</th>
-              <th className="px-3 py-3 text-left">Status</th>
-              <th className="px-3 py-3 text-left">Posts</th>
-              <th className="px-3 py-3 text-left">Created</th>
+              <th className="px-3 py-3 text-right">مساحة العمل</th>
+              <th className="px-3 py-3 text-right">الهدف</th>
+              <th className="px-3 py-3 text-right">الحالة</th>
+              <th className="px-3 py-3 text-right">المنشورات</th>
+              <th className="px-3 py-3 text-right">تاريخ الإنشاء</th>
               <th className="px-5 py-3" />
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 && (
-              <tr><td colSpan={7} className="px-5 py-8 text-center text-gray-400">No plans</td></tr>
+              <tr><td colSpan={7} className="px-5 py-8 text-center text-gray-400">لا توجد خطط</td></tr>
             )}
             {filtered.map(plan => (
               <tr key={plan.id} className={`border-b border-gray-50 transition-colors ${selected.has(plan.id) ? 'bg-indigo-50' : 'hover:bg-gray-50'}`}>
-                <td className="pl-5 pr-3 py-3 w-10">
+                <td className="pr-5 pl-3 py-3 w-10">
                   <input
                     type="checkbox"
                     checked={selected.has(plan.id)}
@@ -126,29 +132,29 @@ export default function AdminPlansPage() {
                     className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
                   />
                 </td>
-                <td className="px-3 py-3 text-gray-700">
+                <td className="px-3 py-3 text-gray-700 text-right">
                   <Link to={`/workspaces/${plan.workspace_id}`} className="hover:text-indigo-600 font-medium">{plan.workspace_name}</Link>
                 </td>
-                <td className="px-3 py-3 text-gray-600 max-w-xs truncate">
+                <td className="px-3 py-3 text-gray-600 max-w-xs truncate text-right">
                   <Link to={`/workspaces/${plan.workspace_id}/plans/${plan.id}`} className="hover:text-indigo-600">
-                    {plan.goal || <span className="italic text-gray-400">general awareness</span>}
+                    {plan.goal || <span className="italic text-gray-400">وعي عام</span>}
                   </Link>
                 </td>
-                <td className="px-3 py-3">
+                <td className="px-3 py-3 text-right">
                   <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${STATUS_COLOR[plan.status] ?? 'bg-gray-100 text-gray-600'}`}>
-                    {plan.status}
+                    {STATUS_LABEL[plan.status] ?? plan.status}
                   </span>
                   {plan.error && <p className="text-xs text-red-500 mt-0.5 truncate max-w-xs">{plan.error}</p>}
                 </td>
-                <td className="px-3 py-3 text-gray-500">{plan.post_count}</td>
-                <td className="px-3 py-3 text-gray-400 text-xs">{new Date(plan.created_at).toLocaleString()}</td>
-                <td className="px-5 py-3 text-right">
+                <td className="px-3 py-3 text-gray-500 text-right">{plan.post_count}</td>
+                <td className="px-3 py-3 text-gray-400 text-xs text-right">{new Date(plan.created_at).toLocaleString('ar-SA')}</td>
+                <td className="px-5 py-3 text-left">
                   <button
                     onClick={() => handleDelete(plan.id)}
                     disabled={deleting === plan.id}
                     className="text-xs text-red-500 hover:text-red-700 disabled:opacity-50 transition-colors"
                   >
-                    {deleting === plan.id ? 'Deleting…' : 'Delete'}
+                    {deleting === plan.id ? 'جارٍ الحذف…' : 'حذف'}
                   </button>
                 </td>
               </tr>
