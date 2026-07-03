@@ -8,6 +8,15 @@ sqlalchemy==2.0.51
 asyncpg==0.30.0
 alembic==1.18.5
 greenlet>=3.0
+pgvector==0.3.6
+
+# Document parsing
+pypdf==5.4.0
+python-docx==1.1.2
+
+# Embeddings (open-source, in-process inference)
+# torch: use CPU-only wheel in Docker (see Dockerfile builder stage) to avoid ~2 GB CUDA build
+sentence-transformers==3.4.1
 
 # Configuration
 pydantic==2.13.4
@@ -16,12 +25,20 @@ python-dotenv==1.2.2
 
 # HTTP client
 httpx==0.28.1
+ddgs==9.14.4
 
 # LangChain / Gemini / LangGraph / LangSmith
 langchain-core==1.4.8
 langchain-google-genai>=4.2,<5
 langgraph==1.2.6
 langsmith==0.9.3
+
+# LangGraph Postgres checkpointer (Phase 3 — durable generation state)
+# Requires psycopg v3 (separate from asyncpg used by SQLAlchemy)
+langgraph-checkpoint-postgres==3.1.0
+# psycopg[binary] bundles libpq — required locally (no system libpq on Mac).
+# In Docker the system libpq5 is present but binary co-installs cleanly.
+psycopg[binary,pool]==3.3.4
 
 # Testing
 # NOTE: pytest 9.x and pytest-asyncio 1.x are major version bumps — review changelogs before upgrading.
