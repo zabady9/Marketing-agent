@@ -2,6 +2,9 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 import WorkspacesPage from './pages/WorkspacesPage'
 import WorkspacePage from './pages/WorkspacePage'
 import PlanPage from './pages/PlanPage'
+import OnboardingWizard from './pages/OnboardingWizard'
+import BrandBrainPage from './pages/BrandBrainPage'
+import ChatPage from './pages/ChatPage'
 import AdminLayout from './pages/admin/AdminLayout'
 import AdminDashboardPage from './pages/admin/AdminDashboardPage'
 import AdminWorkspacesPage from './pages/admin/AdminWorkspacesPage'
@@ -14,7 +17,11 @@ export default function App() {
     <Routes>
       <Route path="/" element={<WorkspacesPage />} />
       <Route path="/workspaces/:wsId" element={<WorkspacePage />} />
+      <Route path="/workspaces/:wsId/onboarding" element={<OnboardingWizard />} />
+      <Route path="/workspaces/:wsId/brand-brain" element={<BrandBrainPage />} />
       <Route path="/workspaces/:wsId/plans/:planId" element={<PlanPage />} />
+      <Route path="/workspaces/:wsId/chat" element={<ChatPage />} />
+      <Route path="/workspaces/:wsId/chat/:sessionId" element={<ChatPage />} />
 
       <Route path="/admin" element={<AdminLayout />}>
         <Route index element={<AdminDashboardPage />} />
