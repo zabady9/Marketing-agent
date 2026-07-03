@@ -12,6 +12,28 @@ const STATUS_COLOR: Record<string, string> = {
   failed: 'bg-red-100 text-red-700',
 }
 
+const STATUS_LABEL: Record<string, string> = {
+  generating: 'جارٍ التوليد',
+  ready: 'جاهز',
+  failed: 'فشل',
+}
+
+const POST_STATUS_LABEL: Record<string, string> = {
+  pending_approval: 'في الانتظار',
+  approved: 'مُعتمد',
+  scheduled: 'مُجدول',
+  published: 'منشور',
+  rejected: 'مرفوض',
+}
+
+const POST_STATUS_COLOR: Record<string, string> = {
+  pending_approval: 'text-yellow-600',
+  approved: 'text-green-600',
+  scheduled: 'text-blue-600',
+  published: 'text-purple-600',
+  rejected: 'text-red-500',
+}
+
 interface StreamLine {
   type: string
   message?: string
@@ -38,9 +60,12 @@ export default function PlanPage() {
     setPlan(p => p ? { ...p, posts: p.posts.map(post => post.id === updated.id ? updated : post) } : p)
   }
 
+  function deletePost(postId: string) {
+    setPlan(p => p ? { ...p, posts: p.posts.filter(post => post.id !== postId) } : p)
+  }
+
   const addLine = useCallback((line: StreamLine) => {
     setStreamLines(prev => [...prev, line])
-    // Auto-scroll terminal
     setTimeout(() => {
       terminalRef.current?.scrollTo({ top: terminalRef.current.scrollHeight, behavior: 'smooth' })
     }, 30)
@@ -63,7 +88,6 @@ export default function PlanPage() {
         es.close()
         esRef.current = null
         setStreaming(false)
-        // Fetch the completed plan with all posts
         if (wsId && planId) {
           const p = await getPlan(wsId, planId)
           setPlan(p)
@@ -98,7 +122,7 @@ export default function PlanPage() {
         startStream()
       }
     }).catch(() => {
-      setError('Could not load plan')
+      setError('تعذّر تحميل الخطة')
       setLoading(false)
     })
 
@@ -110,13 +134,13 @@ export default function PlanPage() {
 
   if (loading) return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-      <div className="text-gray-400 text-sm">Loading…</div>
+      <div className="text-gray-400 text-sm">جارٍ التحميل…</div>
     </div>
   )
 
   if (error || !plan) return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-      <div className="text-red-500 text-sm">{error || 'Plan not found'}</div>
+      <div className="text-red-500 text-sm">{error || 'الخطة غير موجودة'}</div>
     </div>
   )
 
@@ -129,42 +153,42 @@ export default function PlanPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="bg-slate-900 text-white px-8 py-4 flex items-center gap-3">
-        <div className="w-8 h-8 bg-indigo-500 rounded-lg flex items-center justify-center font-bold text-sm">M</div>
-        <Link to="/" className="text-slate-400 hover:text-white text-sm transition-colors">Workspaces</Link>
+        <div className="w-8 h-8 bg-indigo-500 rounded-lg flex items-center justify-center font-bold text-sm">م</div>
+        <Link to="/" className="text-slate-400 hover:text-white text-sm transition-colors">مساحات العمل</Link>
         <span className="text-slate-600">/</span>
-        <Link to={`/workspaces/${wsId}`} className="text-slate-400 hover:text-white text-sm transition-colors">Workspace</Link>
+        <Link to={`/workspaces/${wsId}`} className="text-slate-400 hover:text-white text-sm transition-colors">مساحة العمل</Link>
         <span className="text-slate-600">/</span>
-        <span className="text-sm font-medium">Plan</span>
+        <span className="text-sm font-medium">الخطة</span>
       </header>
 
       <main className="max-w-3xl mx-auto px-6 py-10">
         {/* Plan header */}
         <div className="mb-8">
           <div className="flex items-center gap-3 mb-2">
+            <span className="text-sm text-gray-400">{new Date(plan.created_at).toLocaleDateString('ar-SA')}</span>
             <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${STATUS_COLOR[plan.status] ?? 'bg-gray-100 text-gray-600'}`}>
-              {plan.status === 'generating' ? '⏳ Generating…' : plan.status}
+              {plan.status === 'generating' ? '⏳ جارٍ التوليد…' : (STATUS_LABEL[plan.status] ?? plan.status)}
             </span>
-            <span className="text-sm text-gray-400">{new Date(plan.created_at).toLocaleDateString()}</span>
           </div>
-          <h1 className="text-2xl font-bold text-gray-900">{plan.goal || 'General brand awareness'}</h1>
+          <h1 className="text-2xl font-bold text-gray-900">{plan.goal || 'تعزيز الوعي بالعلامة التجارية'}</h1>
 
           {plan.status === 'ready' && (
             <div className="flex gap-4 mt-4 text-sm">
               {[
-                { label: 'pending', count: pending, color: 'text-yellow-600' },
-                { label: 'approved', count: approved, color: 'text-green-600' },
-                { label: 'scheduled', count: scheduled, color: 'text-blue-600' },
-                { label: 'published', count: published, color: 'text-purple-600' },
-                { label: 'rejected', count: rejected, color: 'text-red-500' },
+                { label: 'pending_approval', count: pending },
+                { label: 'approved', count: approved },
+                { label: 'scheduled', count: scheduled },
+                { label: 'published', count: published },
+                { label: 'rejected', count: rejected },
               ].filter(s => s.count > 0).map(s => (
-                <span key={s.label} className={`font-medium ${s.color}`}>{s.count} {s.label}</span>
+                <span key={s.label} className={`font-medium ${POST_STATUS_COLOR[s.label]}`}>{s.count} {POST_STATUS_LABEL[s.label]}</span>
               ))}
             </div>
           )}
 
           {plan.status === 'failed' && (
             <div className="mt-4 bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-700">
-              Generation failed: {plan.error}
+              فشل التوليد: {plan.error}
             </div>
           )}
         </div>
@@ -178,11 +202,11 @@ export default function PlanPage() {
                 <div className="w-3 h-3 rounded-full bg-yellow-500" />
                 <div className="w-3 h-3 rounded-full bg-green-500" />
               </div>
-              <span className="text-slate-400 text-xs ml-2 font-mono">generation log</span>
+              <span className="text-slate-400 text-xs mr-2 font-mono">سجل التوليد</span>
               {streaming && (
-                <span className="ml-auto flex items-center gap-1.5 text-xs text-green-400">
+                <span className="mr-auto flex items-center gap-1.5 text-xs text-green-400">
                   <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-                  live
+                  مباشر
                 </span>
               )}
             </div>
@@ -206,7 +230,7 @@ export default function PlanPage() {
         {plan.posts.length > 0 && (
           <div className="space-y-4">
             {plan.posts.map(post => (
-              <PostCard key={post.id} post={post} wsId={wsId!} onUpdate={updatePost} />
+              <PostCard key={post.id} post={post} wsId={wsId!} onUpdate={updatePost} onDelete={deletePost} />
             ))}
           </div>
         )}
@@ -218,15 +242,15 @@ export default function PlanPage() {
 function StreamLineView({ line }: { line: StreamLine }) {
   switch (line.type) {
     case 'status':
-      return <p className="text-slate-400">→ {line.message}</p>
+      return <p className="text-slate-400">← {line.message}</p>
 
     case 'strategy_done':
       return (
         <div>
-          <p className="text-green-400">✓ Strategy complete — {line.ideas?.length} ideas</p>
+          <p className="text-green-400">✓ اكتملت الاستراتيجية — {line.ideas?.length} أفكار</p>
           {line.ideas?.map(idea => (
-            <p key={idea.day} className="text-slate-500 text-xs ml-4">
-              Day {idea.day}: {idea.theme} <span className="text-slate-600">({idea.format})</span>
+            <p key={idea.day} className="text-slate-500 text-xs mr-4">
+              اليوم {idea.day}: {idea.theme} <span className="text-slate-600">({idea.format})</span>
             </p>
           ))}
         </div>
@@ -237,7 +261,7 @@ function StreamLineView({ line }: { line: StreamLine }) {
 
     case 'post_written':
       return (
-        <div className="ml-4">
+        <div className="mr-4">
           <p className="text-slate-300 text-xs leading-relaxed whitespace-pre-wrap line-clamp-3">{line.content}</p>
           {(line.hashtags ?? []).length > 0 && (
             <p className="text-indigo-400 text-xs mt-0.5">{(line.hashtags ?? []).join(' ')}</p>
@@ -246,14 +270,14 @@ function StreamLineView({ line }: { line: StreamLine }) {
       )
 
     case 'critic_start':
-      return <p className="text-slate-500 text-xs ml-2">🔍 {line.message}</p>
+      return <p className="text-slate-500 text-xs mr-2">🔍 {line.message}</p>
 
     case 'critic_revision':
       return (
         <div>
           <p className="text-orange-400 text-xs">⚠ {line.message}</p>
           {(line.issues ?? []).map((issue, i) => (
-            <p key={i} className="text-slate-500 text-xs ml-4">· {issue}</p>
+            <p key={i} className="text-slate-500 text-xs mr-4">· {issue}</p>
           ))}
         </div>
       )
@@ -262,10 +286,10 @@ function StreamLineView({ line }: { line: StreamLine }) {
       return <p className="text-green-400">✓ {line.message}</p>
 
     case 'done':
-      return <p className="text-green-300 font-semibold">🎉 All posts generated and saved!</p>
+      return <p className="text-green-300 font-semibold">🎉 تم توليد جميع المنشورات وحفظها!</p>
 
     case 'error':
-      return <p className="text-red-400">✗ Error: {line.message}</p>
+      return <p className="text-red-400">✗ خطأ: {line.message}</p>
 
     default:
       return null
