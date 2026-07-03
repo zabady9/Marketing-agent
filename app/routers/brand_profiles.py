@@ -9,8 +9,10 @@ from app.services.workspace import get_workspace
 router = APIRouter(prefix="/workspaces", tags=["brand"])
 
 
-@router.put("/{workspace_id}/brand", response_model=BrandProfileResponse)
-async def upsert_brand_endpoint(
+# ── Canonical routes ────────────────────────────────────────────────────────
+
+@router.put("/{workspace_id}/brand-profile", response_model=BrandProfileResponse)
+async def upsert_brand_profile_endpoint(
     workspace_id: str,
     data: BrandProfileUpsert,
     db: AsyncSession = Depends(get_db),
@@ -21,8 +23,32 @@ async def upsert_brand_endpoint(
     return await upsert_brand_profile(db, workspace_id, data)
 
 
-@router.get("/{workspace_id}/brand", response_model=BrandProfileResponse)
-async def get_brand_endpoint(
+@router.get("/{workspace_id}/brand-profile", response_model=BrandProfileResponse)
+async def get_brand_profile_endpoint(
+    workspace_id: str, db: AsyncSession = Depends(get_db)
+):
+    bp = await get_brand_profile(db, workspace_id)
+    if not bp:
+        raise HTTPException(status_code=404, detail="Brand profile not set")
+    return bp
+
+
+# ── Deprecated aliases (kept for backward compatibility) ───────────────────
+
+@router.put("/{workspace_id}/brand", response_model=BrandProfileResponse, include_in_schema=False)
+async def upsert_brand_deprecated(
+    workspace_id: str,
+    data: BrandProfileUpsert,
+    db: AsyncSession = Depends(get_db),
+):
+    ws = await get_workspace(db, workspace_id)
+    if not ws:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    return await upsert_brand_profile(db, workspace_id, data)
+
+
+@router.get("/{workspace_id}/brand", response_model=BrandProfileResponse, include_in_schema=False)
+async def get_brand_deprecated(
     workspace_id: str, db: AsyncSession = Depends(get_db)
 ):
     bp = await get_brand_profile(db, workspace_id)
