@@ -30,8 +30,25 @@ _critic_agent = CriticAgent()
 
 async def strategy_node(state: GraphState) -> dict:
     plan_id = state["plan_id"]
-    brand_profile = state["brand_profile"]
+    brand_profile = state["brand_profile"].copy()  # don't mutate shared state dict
     goal = state["goal"]
+
+    # Best-effort: augment the brand profile with relevant knowledge chunks.
+    # A failure here must never block generation.
+    try:
+        from app.database import AsyncSessionLocal
+        from app.services.knowledge_search import search_knowledge
+
+        query = f"{brand_profile.get('brand_name', '')} {goal or ''}".strip()
+        if query:
+            async with AsyncSessionLocal() as db:
+                chunks = await search_knowledge(query, state["workspace_id"], db, k=5)
+            if chunks:
+                brand_profile["knowledge_context"] = "\n\n---\n\n".join(
+                    c.content for c in chunks
+                )
+    except Exception:
+        pass  # knowledge search is best-effort
 
     await event_bus.emit(plan_id, {"type": "status", "message": "Generating content strategy…"})
 
@@ -174,7 +191,7 @@ def _after_advance(state: GraphState) -> str:
     return END
 
 
-def build_graph() -> StateGraph:
+def build_graph(checkpointer=None):
     builder = StateGraph(GraphState)
 
     builder.add_node("strategy", strategy_node)
@@ -188,9 +205,18 @@ def build_graph() -> StateGraph:
     builder.add_conditional_edges("critic", _after_critic, {"content": "content", "advance": "advance"})
     builder.add_conditional_edges("advance", _after_advance, {"content": "content", END: END})
 
-    # Phase 3: swap MemorySaver for a Postgres checkpointer to support
-    # durable human-in-the-loop interrupts that survive restarts.
-    return builder.compile(checkpointer=MemorySaver())
+    return builder.compile(checkpointer=checkpointer or MemorySaver())
 
 
 generation_graph = build_graph()
+
+
+def init_graph(checkpointer) -> None:
+    """Replace the module-level graph with one using the given checkpointer.
+
+    Called once at startup after AsyncPostgresSaver is ready. generation.py
+    reads generation_graph via module-attribute lookup (_graph_mod.generation_graph)
+    so it sees the replacement immediately on the next ainvoke call.
+    """
+    global generation_graph
+    generation_graph = build_graph(checkpointer)

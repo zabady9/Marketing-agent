@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     # Database
     database_url: str = "postgresql+asyncpg://postgres:changeme@db:5432/marketing"
 
+    @property
+    def checkpointer_conn_str(self) -> str:
+        """psycopg v3 connection string for AsyncPostgresSaver (strips +asyncpg driver suffix)."""
+        return self.database_url.replace("+asyncpg", "", 1)
+
     # Gemini
     google_api_key: SecretStr = Field(default=SecretStr("placeholder"))
     reasoning_model: str = "gemini-2.5-pro"
@@ -38,6 +43,13 @@ class Settings(BaseSettings):
     # Postiz
     postiz_api_url: str = "http://postiz:5000"
     postiz_api_key: SecretStr = Field(default=SecretStr("placeholder"))
+
+    # Embeddings (open-source, in-process via sentence-transformers)
+    embedding_model: str = "BAAI/bge-base-en-v1.5"
+    embedding_dimension: int = 768
+
+    # File uploads (document knowledge base)
+    uploads_dir: str = "/app/uploads"
 
 
 settings = Settings()

@@ -12,4 +12,5 @@ def get_llm(tier: Literal["reasoning", "cheap"]) -> ChatGoogleGenerativeAI:
         google_api_key=settings.google_api_key.get_secret_value(),
         max_tokens=settings.max_tokens,
         max_retries=3,
+        request_timeout=120,
     )
