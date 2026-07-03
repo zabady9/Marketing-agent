@@ -5,17 +5,55 @@ export interface Workspace {
   created_at: string
 }
 
+export interface ProductItem {
+  name: string
+  description: string
+  price_point?: string
+}
+
+export interface AudienceSegment {
+  name: string
+  description: string
+  pain_points: string[]
+  channels: string[]
+}
+
 export interface BrandProfile {
   id: string
   workspace_id: string
-  name: string
-  audience: string
-  tone: string
-  language: string
+  company_name: string | null
+  brand_name: string | null
+  industry: string | null
+  products: ProductItem[]
+  audience_segments: AudienceSegment[]
+  tone: string | null
+  voice_guidelines: string | null
+  positioning: string | null
+  goals: string[]
   avoid: string[]
   extra: Record<string, unknown>
+  onboarding_status: 'in_progress' | 'pending_review' | 'active'
   created_at: string
   updated_at: string
+}
+
+export interface KnowledgeDocument {
+  id: string
+  workspace_id: string
+  filename: string
+  doc_type: string
+  storage_path: string
+  status: 'processing' | 'indexed' | 'failed'
+  uploaded_at: string
+}
+
+export interface KnowledgeChunk {
+  id: string
+  document_id: string
+  workspace_id: string
+  content: string
+  chunk_metadata: Record<string, unknown>
+  created_at: string
 }
 
 export type PostStatus =
@@ -58,4 +96,25 @@ export interface Connection {
   picture: string
   disabled: boolean
   profile: string
+}
+
+export interface ChatMessage {
+  id: string
+  session_id: string
+  role: 'user' | 'assistant'
+  content: string
+  metadata_: Record<string, unknown>
+  created_at: string
+}
+
+export interface ChatSession {
+  id: string
+  workspace_id: string
+  title: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ChatSessionDetail extends ChatSession {
+  messages: ChatMessage[]
 }
