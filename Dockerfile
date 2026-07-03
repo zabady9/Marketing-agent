@@ -12,6 +12,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 COPY requirements.txt ./
 RUN pip install --upgrade pip wheel && \
+    pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu && \
     pip install --no-cache-dir -r requirements.txt
 
 # Stage 2: Runtime
@@ -34,7 +35,10 @@ COPY --chown=appuser:appuser app/ ./app/
 COPY --chown=appuser:appuser alembic/ ./alembic/
 COPY --chown=appuser:appuser alembic.ini ./
 
-RUN mkdir -p /app/logs && chown -R appuser:appuser /app
+ENV HF_HOME=/app/.huggingface
+RUN mkdir -p /app/logs /app/uploads /app/.huggingface && \
+    python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-base-en-v1.5')" && \
+    chown -R appuser:appuser /app
 USER appuser
 
 EXPOSE 8000
