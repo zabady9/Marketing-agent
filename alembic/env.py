@@ -27,7 +27,13 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection):
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        # Disable type comparison to prevent spurious alter_column for pgvector columns,
+        # which Alembic's autogenerate cannot introspect correctly.
+        compare_type=False,
+    )
     with context.begin_transaction():
         context.run_migrations()
 
