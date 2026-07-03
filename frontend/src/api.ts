@@ -1,14 +1,15 @@
-import type { BrandProfile, Connection, Plan, Post, Workspace } from './types'
+import type { BrandProfile, ChatSession, ChatSessionDetail, Connection, KnowledgeChunk, KnowledgeDocument, Plan, Post, Workspace } from './types'
 
-const BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:8001'
+const BASE = import.meta.env.VITE_API_URL ?? ''
 const ADMIN_KEY = import.meta.env.VITE_ADMIN_API_KEY ?? ''
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const adminHeaders = path.startsWith('/api/admin') && ADMIN_KEY
-    ? { 'X-Admin-Key': ADMIN_KEY }
-    : {}
+  const isFormData = init?.body instanceof FormData
+  const extraHeaders: Record<string, string> = {}
+  if (!isFormData) extraHeaders['Content-Type'] = 'application/json'
+  if (path.startsWith('/api/admin') && ADMIN_KEY) extraHeaders['X-Admin-Key'] = ADMIN_KEY
   const res = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...adminHeaders, ...init?.headers },
+    headers: { ...extraHeaders, ...(init?.headers as Record<string, string> | undefined) },
     ...init,
   })
   if (!res.ok) {
@@ -24,11 +25,38 @@ export const listWorkspaces = () => req<Workspace[]>('/api/workspaces')
 export const createWorkspace = (name: string) =>
   req<Workspace>('/api/workspaces', { method: 'POST', body: JSON.stringify({ name }) })
 
-// Brand
-export const getBrand = (wsId: string) =>
-  req<BrandProfile>(`/api/workspaces/${wsId}/brand`).catch(() => null)
+// Brand Profile (canonical)
+export const getBrandProfile = (wsId: string) =>
+  req<BrandProfile>(`/api/workspaces/${wsId}/brand-profile`).catch(() => null)
+export const updateBrandProfile = (wsId: string, data: Partial<BrandProfile>) =>
+  req<BrandProfile>(`/api/workspaces/${wsId}/brand-profile`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  })
+
+// Deprecated aliases — kept to avoid breaking existing pages until cleanup
+export const getBrand = (wsId: string) => getBrandProfile(wsId)
 export const upsertBrand = (wsId: string, data: Partial<BrandProfile>) =>
-  req<BrandProfile>(`/api/workspaces/${wsId}/brand`, { method: 'PUT', body: JSON.stringify(data) })
+  updateBrandProfile(wsId, data)
+
+// Knowledge documents
+export const uploadDocument = (wsId: string, file: File, docType = 'other') => {
+  const form = new FormData()
+  form.append('file', file)
+  form.append('doc_type', docType)
+  return req<KnowledgeDocument>(`/api/workspaces/${wsId}/knowledge/documents`, {
+    method: 'POST',
+    body: form,
+  })
+}
+export const listDocuments = (wsId: string) =>
+  req<KnowledgeDocument[]>(`/api/workspaces/${wsId}/knowledge/documents`)
+export const deleteDocument = (wsId: string, docId: string) =>
+  req<void>(`/api/workspaces/${wsId}/knowledge/documents/${docId}`, { method: 'DELETE' })
+export const searchKnowledge = (wsId: string, q: string, k = 5) =>
+  req<KnowledgeChunk[]>(
+    `/api/workspaces/${wsId}/knowledge/search?q=${encodeURIComponent(q)}&k=${k}`
+  )
 
 // Plans
 export const listPlans = (wsId: string) => req<Plan[]>(`/api/workspaces/${wsId}/plans`)
@@ -59,6 +87,28 @@ export const schedulePost = (postId: string, integrationId: string, provider: st
     body: JSON.stringify({ integration_id: integrationId, provider, when }),
   })
 
+// Chat
+export const createChatSession = (wsId: string, title?: string) =>
+  req<ChatSession>(`/api/workspaces/${wsId}/chat/sessions`, {
+    method: 'POST',
+    body: JSON.stringify({ title: title ?? null }),
+  })
+export const listChatSessions = (wsId: string) =>
+  req<ChatSession[]>(`/api/workspaces/${wsId}/chat/sessions`)
+export const getChatSession = (wsId: string, sessionId: string) =>
+  req<ChatSessionDetail>(`/api/workspaces/${wsId}/chat/sessions/${sessionId}`)
+export const deleteChatSession = (wsId: string, sessionId: string) =>
+  req<void>(`/api/workspaces/${wsId}/chat/sessions/${sessionId}`, { method: 'DELETE' })
+export const sendChatMessage = (wsId: string, sessionId: string, content: string) =>
+  req<{ message_id: string }>(
+    `/api/workspaces/${wsId}/chat/sessions/${sessionId}/messages`,
+    { method: 'POST', body: JSON.stringify({ content }) }
+  )
+export const submitDraftPost = (postId: string) =>
+  req<Post>(`/api/posts/${postId}:submit`, { method: 'POST' })
+export const deleteDraftPost = (postId: string) =>
+  req<void>(`/api/posts/${postId}`, { method: 'DELETE' })
+
 // Admin
 export interface AdminStats {
   workspaces: number
@@ -74,7 +124,7 @@ export interface AdminPlan {
 }
 export interface AdminPost {
   id: string; plan_id: string; workspace_id: string; workspace_name: string
-  day: number; theme: string; format: string; content: string
+  day: number; theme: string; format: string; angle: string; content: string
   hashtags: string[]; suggested_time: string; status: string
   postiz_post_id: string | null; created_at: string
 }
