@@ -17,6 +17,9 @@ class ChatMessageResponse(BaseModel):
     role: str
     content: str
     metadata_: dict[str, Any]
+    agent_id: str | None = None
+    meeting_id: str | None = None
+    turn_index: int | None = None
     created_at: str
 
     model_config = {"from_attributes": True}
@@ -38,3 +41,4 @@ class ChatSessionDetailResponse(ChatSessionResponse):
 
 class SendMessageResponse(BaseModel):
     message_id: str
+    meeting_id: str | None = None

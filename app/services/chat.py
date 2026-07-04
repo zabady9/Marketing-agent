@@ -80,6 +80,9 @@ async def save_message(
     role: MessageRole,
     content: str,
     metadata: dict | None = None,
+    agent_id: str | None = None,
+    meeting_id: str | None = None,
+    turn_index: int | None = None,
 ) -> ChatMessage:
     msg = ChatMessage(
         id=str(uuid.uuid4()),
@@ -88,6 +91,9 @@ async def save_message(
         role=role.value,
         content=content,
         metadata_=metadata or {},
+        agent_id=agent_id,
+        meeting_id=meeting_id,
+        turn_index=turn_index,
     )
     db.add(msg)
     await db.flush()

@@ -1,7 +1,7 @@
 import enum
 import uuid
 
-from sqlalchemy import Enum, ForeignKey, JSON, String, Text, func
+from sqlalchemy import Enum, ForeignKey, Integer, JSON, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -47,4 +47,7 @@ class ChatMessage(Base):
     metadata_: Mapped[dict] = mapped_column(
         "metadata", JSON, nullable=False, default=dict
     )
+    agent_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    meeting_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    turn_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[str] = mapped_column(server_default=func.now())
