@@ -80,7 +80,7 @@ export default function ChatPage() {
   const [liveAgentMessages, setLiveAgentMessages] = useState<LiveAgentMessage[]>([])
 
   const esRef = useRef<EventSource | null>(null)
-  const bottomRef = useRef<HTMLDivElement>(null)
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
   const currentStreamRef = useRef('')
   const currentAgentRef = useRef<CurrentAgent | null>(null)
 
@@ -95,7 +95,8 @@ export default function ChatPage() {
   }, [wsId, sessionId])
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    const el = scrollContainerRef.current
+    if (el) el.scrollTop = el.scrollHeight
   }, [detail?.messages, streamingContent, liveAgentMessages])
 
   const resetStreamState = () => {
@@ -252,7 +253,7 @@ export default function ChatPage() {
             </div>
           ) : (
             <>
-              <div className="flex-1 overflow-y-auto px-6 py-6 space-y-4">
+              <div ref={scrollContainerRef} className="flex-1 min-h-0 overflow-y-auto px-6 py-6 space-y-4">
                 {/* Persisted messages — meetings grouped as discussion + synthesis */}
                 {groups.map((g, i) =>
                   g.type === 'single'
@@ -292,7 +293,7 @@ export default function ChatPage() {
                 )}
 
                 {error && <p className="text-xs text-red-500 text-center">{error}</p>}
-                <div ref={bottomRef} />
+                <div />
               </div>
 
               <form onSubmit={handleSend} className="px-6 py-4 border-t border-gray-200 bg-white">
