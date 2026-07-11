@@ -1,6 +1,6 @@
 import os
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,6 +20,14 @@ class Settings(BaseSettings):
 
     # Database
     database_url: str = "postgresql+asyncpg://postgres:changeme@db:5432/marketing"
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def ensure_asyncpg_driver(cls, v: str) -> str:
+        if v.startswith("postgresql://") or v.startswith("postgres://"):
+            v = v.replace("postgres://", "postgresql://", 1)
+            v = v.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return v
 
     @property
     def checkpointer_conn_str(self) -> str:
