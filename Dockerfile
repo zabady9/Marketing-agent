@@ -34,11 +34,13 @@ ENV PYTHONPATH=/app
 COPY --chown=appuser:appuser app/ ./app/
 COPY --chown=appuser:appuser alembic/ ./alembic/
 COPY --chown=appuser:appuser alembic.ini ./
+COPY --chown=appuser:appuser start.sh ./
 
 ENV HF_HOME=/app/.huggingface
 RUN mkdir -p /app/logs /app/uploads /app/.huggingface && \
     python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-base-en-v1.5')" && \
-    chown -R appuser:appuser /app
+    chown -R appuser:appuser /app && \
+    chmod +x /app/start.sh
 USER appuser
 
 EXPOSE 8000
@@ -46,5 +48,4 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
     CMD curl -f http://localhost:8000/api/health || exit 1
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", \
-     "--workers", "1", "--loop", "uvloop"]
+CMD ["/app/start.sh"]
