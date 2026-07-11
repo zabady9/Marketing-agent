@@ -192,6 +192,17 @@ export default function ChatPage() {
     if (!wsId || !sessionId || !input.trim() || sending) return
     const content = input.trim()
     setInput(''); setSending(true); setError('')
+    const tempMsg: ChatMessage = {
+      id: `temp-${Date.now()}`,
+      session_id: sessionId,
+      role: 'user',
+      content,
+      metadata_: {},
+      agent_id: null,
+      meeting_id: null,
+      created_at: new Date().toISOString(),
+    }
+    setDetail(prev => prev ? { ...prev, messages: [...prev.messages, tempMsg] } : prev)
     try {
       await sendChatMessage(wsId, sessionId, content, meetingMode ? 'meeting' : 'chat')
       openStream(sessionId)
