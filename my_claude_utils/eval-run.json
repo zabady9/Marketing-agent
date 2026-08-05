@@ -1,0 +1,1342 @@
+[
+  {
+    "scenario": "A1",
+    "section": "A",
+    "request": {
+      "method": "POST",
+      "url": "http://localhost:8001/api/workspaces/31760ca1-efa5-42d1-9403-20e623246ff8/consult",
+      "body": {
+        "question": "What are my brand's biggest weaknesses vs competitors?"
+      }
+    },
+    "initial_http_status": 202,
+    "response_body": {
+      "classified_as": "swot"
+    },
+    "classified_as": "swot",
+    "final_status": "ready",
+    "eval": {
+      "passed": false,
+      "overall_score": 0.4,
+      "flags": [
+        "Only 0% of claims have verified citations (need \u226580%)",
+        "Incomplete sections: 'strengths' has fewer than 2 items; 'weaknesses' has fewer than 2 items",
+        "Low citation grounding: No items with citations available to ground-check"
+      ],
+      "criteria": [
+        {
+          "name": "citation_support_rate",
+          "score": 0.0,
+          "detail": "No items found in output",
+          "passed": false
+        },
+        {
+          "name": "section_completeness",
+          "score": 0.0,
+          "detail": "'strengths' has fewer than 2 items; 'weaknesses' has fewer than 2 items",
+          "passed": false
+        },
+        {
+          "name": "evidence_grounding",
+          "score": 0.0,
+          "detail": "No items with citations available to ground-check",
+          "passed": false
+        },
+        {
+          "name": "recommendation_consistency",
+          "score": 1.0,
+          "detail": "Not applicable for this analysis type",
+          "passed": true
+        },
+        {
+          "name": "internal_consistency",
+          "score": 1.0,
+          "detail": "Not enough claims to check for contradictions",
+          "passed": true
+        }
+      ]
+    },
+    "flags": [],
+    "extra": {
+      "analysis_id": "be2ef8e2-f9fb-4223-8d8e-3f67103f7ab8",
+      "disclaimer": "\u0647\u0630\u0627 \u0627\u0644\u062a\u062d\u0644\u064a\u0644 \u0645\u064f\u0648\u0644\u064e\u0651\u062f \u0628\u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064a \u0627\u0633\u062a\u0646\u0627\u062f\u0627\u064b \u0625\u0644\u0649 \u0645\u0635\u0627\u062f\u0631 \u0639\u0627\u0645\u0629 \u0645\u062a\u0627\u062d\u0629 \u0639\u0644\u0649 \u0627\u0644\u0625\u0646\u062a\u0631\u0646\u062a. \u064a\u064f\u0639\u062f\u0651 \u0645\u0633\u0648\u062f\u0629 \u0623\u0648\u0644\u064a\u0629 \u062a\u0633\u062a\u0644\u0632\u0645 \u0645\u0631\u0627\u062c\u0639\u0629 \u0645\u062a\u062e\u0635\u0635 \u0642\u0628\u0644 \u0627\u062a\u062e\u0627\u0630 \u0623\u064a \u0642\u0631\u0627\u0631 \u0627\u0633\u062a\u062b\u0645\u0627\u0631\u064a \u0623\u0648 \u0627\u0633\u062a\u0631\u0627\u062a\u064a\u062c\u064a."
+    },
+    "citations_count": null,
+    "citations": null,
+    "output": null,
+    "error_msg": null
+  },
+  {
+    "scenario": "A2",
+    "section": "A",
+    "request": {
+      "method": "POST",
+      "url": "http://localhost:8001/api/workspaces/31760ca1-efa5-42d1-9403-20e623246ff8/consult",
+      "body": {
+        "question": "How will new e-invoicing regulations affect our operations?"
+      }
+    },
+    "initial_http_status": 202,
+    "response_body": {
+      "classified_as": "pestel"
+    },
+    "classified_as": "pestel",
+    "final_status": "ready",
+    "eval": {
+      "passed": true,
+      "overall_score": 0.8,
+      "flags": [
+        "Incomplete sections: 'political' is empty; 'social' is empty"
+      ],
+      "criteria": [
+        {
+          "name": "citation_support_rate",
+          "score": 1.0,
+          "detail": "7/7 items have verified citations (100%)",
+          "passed": true
+        },
+        {
+          "name": "section_completeness",
+          "score": 0.0,
+          "detail": "'political' is empty; 'social' is empty",
+          "passed": false
+        },
+        {
+          "name": "evidence_grounding",
+          "score": 1.0,
+          "detail": "5/5 sampled claims are grounded in cited sources",
+          "passed": true
+        },
+        {
+          "name": "recommendation_consistency",
+          "score": 1.0,
+          "detail": "Not applicable for this analysis type",
+          "passed": true
+        },
+        {
+          "name": "internal_consistency",
+          "score": 1.0,
+          "detail": "No contradictions found",
+          "passed": true
+        }
+      ]
+    },
+    "flags": [],
+    "extra": {
+      "analysis_id": "6e08d6f1-1a7b-4fbc-bb55-67e26b36d506",
+      "disclaimer": "\u0647\u0630\u0627 \u0627\u0644\u062a\u062d\u0644\u064a\u0644 \u0645\u064f\u0648\u0644\u064e\u0651\u062f \u0628\u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064a \u0627\u0633\u062a\u0646\u0627\u062f\u0627\u064b \u0625\u0644\u0649 \u0645\u0635\u0627\u062f\u0631 \u0639\u0627\u0645\u0629 \u0645\u062a\u0627\u062d\u0629 \u0639\u0644\u0649 \u0627\u0644\u0625\u0646\u062a\u0631\u0646\u062a. \u064a\u064f\u0639\u062f\u0651 \u0645\u0633\u0648\u062f\u0629 \u0623\u0648\u0644\u064a\u0629 \u062a\u0633\u062a\u0644\u0632\u0645 \u0645\u0631\u0627\u062c\u0639\u0629 \u0645\u062a\u062e\u0635\u0635 \u0642\u0628\u0644 \u0627\u062a\u062e\u0627\u0630 \u0623\u064a \u0642\u0631\u0627\u0631 \u0627\u0633\u062a\u062b\u0645\u0627\u0631\u064a \u0623\u0648 \u0627\u0633\u062a\u0631\u0627\u062a\u064a\u062c\u064a."
+    },
+    "citations_count": null,
+    "citations": null,
+    "output": null,
+    "error_msg": null
+  },
+  {
+    "scenario": "A3",
+    "section": "A",
+    "request": {
+      "method": "POST",
+      "url": "http://localhost:8001/api/workspaces/31760ca1-efa5-42d1-9403-20e623246ff8/consult",
+      "body": {
+        "question": "Should we launch a premium product line in Riyadh?"
+      }
+    },
+    "initial_http_status": 202,
+    "response_body": {
+      "classified_as": "feasibility"
+    },
+    "classified_as": "feasibility",
+    "final_status": "ready",
+    "eval": {
+      "passed": true,
+      "overall_score": 0.9,
+      "flags": [],
+      "criteria": [
+        {
+          "name": "citation_support_rate",
+          "score": 1.0,
+          "detail": "4/4 items have verified citations (100%)",
+          "passed": true
+        },
+        {
+          "name": "section_completeness",
+          "score": 1.0,
+          "detail": "All sections complete",
+          "passed": true
+        },
+        {
+          "name": "evidence_grounding",
+          "score": 0.5,
+          "detail": "2/4 sampled claims are grounded in cited sources",
+          "passed": false
+        },
+        {
+          "name": "recommendation_consistency",
+          "score": 1.0,
+          "detail": "The recommendation to 'proceed with caution' is strongly supported. The rationale accurately identifies a complete lack of market data for zabady in the provided sources, which are for unrelated products, making a premium launch highly risky without further research.",
+          "passed": true
+        },
+        {
+          "name": "internal_consistency",
+          "score": 1.0,
+          "detail": "Not applicable for this analysis type",
+          "passed": true
+        }
+      ]
+    },
+    "flags": [],
+    "extra": {
+      "analysis_id": "94bb1ac9-ec93-4907-bf1f-d51e15fd5973",
+      "disclaimer": "\u0647\u0630\u0627 \u0627\u0644\u062a\u062d\u0644\u064a\u0644 \u0645\u064f\u0648\u0644\u064e\u0651\u062f \u0628\u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064a \u0627\u0633\u062a\u0646\u0627\u062f\u0627\u064b \u0625\u0644\u0649 \u0645\u0635\u0627\u062f\u0631 \u0639\u0627\u0645\u0629 \u0645\u062a\u0627\u062d\u0629 \u0639\u0644\u0649 \u0627\u0644\u0625\u0646\u062a\u0631\u0646\u062a. \u064a\u064f\u0639\u062f\u0651 \u0645\u0633\u0648\u062f\u0629 \u0623\u0648\u0644\u064a\u0629 \u062a\u0633\u062a\u0644\u0632\u0645 \u0645\u0631\u0627\u062c\u0639\u0629 \u0645\u062a\u062e\u0635\u0635 \u0642\u0628\u0644 \u0627\u062a\u062e\u0627\u0630 \u0623\u064a \u0642\u0631\u0627\u0631 \u0627\u0633\u062a\u062b\u0645\u0627\u0631\u064a \u0623\u0648 \u0627\u0633\u062a\u0631\u0627\u062a\u064a\u062c\u064a."
+    },
+    "citations_count": null,
+    "citations": null,
+    "output": null,
+    "error_msg": null
+  },
+  {
+    "scenario": "A4",
+    "section": "A",
+    "request": {
+      "method": "POST",
+      "url": "http://localhost:8001/api/workspaces/31760ca1-efa5-42d1-9403-20e623246ff8/consult",
+      "body": {
+        "question": "Is our messaging consistent with how our target audience sees us?"
+      }
+    },
+    "initial_http_status": 202,
+    "response_body": {
+      "classified_as": "brand_analysis"
+    },
+    "classified_as": "brand_analysis",
+    "final_status": "ready",
+    "eval": {
+      "passed": false,
+      "overall_score": 0.6,
+      "flags": [
+        "Only 0% of claims have verified citations (need \u226580%)",
+        "Low citation grounding: 0/3 sampled claims are grounded in cited sources"
+      ],
+      "criteria": [
+        {
+          "name": "citation_support_rate",
+          "score": 0.0,
+          "detail": "0/3 items have verified citations (0%)",
+          "passed": false
+        },
+        {
+          "name": "section_completeness",
+          "score": 1.0,
+          "detail": "All sections complete",
+          "passed": true
+        },
+        {
+          "name": "evidence_grounding",
+          "score": 0.0,
+          "detail": "0/3 sampled claims are grounded in cited sources",
+          "passed": false
+        },
+        {
+          "name": "recommendation_consistency",
+          "score": 1.0,
+          "detail": "Not applicable for this analysis type",
+          "passed": true
+        },
+        {
+          "name": "internal_consistency",
+          "score": 1.0,
+          "detail": "Not applicable for this analysis type",
+          "passed": true
+        }
+      ]
+    },
+    "flags": [],
+    "extra": {
+      "analysis_id": "833195a6-88b7-474e-9d1b-a5065a465e7b",
+      "disclaimer": "\u0647\u0630\u0627 \u0627\u0644\u062a\u062d\u0644\u064a\u0644 \u0645\u064f\u0648\u0644\u064e\u0651\u062f \u0628\u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064a \u0627\u0633\u062a\u0646\u0627\u062f\u0627\u064b \u0625\u0644\u0649 \u0645\u0635\u0627\u062f\u0631 \u0639\u0627\u0645\u0629 \u0645\u062a\u0627\u062d\u0629 \u0639\u0644\u0649 \u0627\u0644\u0625\u0646\u062a\u0631\u0646\u062a. \u064a\u064f\u0639\u062f\u0651 \u0645\u0633\u0648\u062f\u0629 \u0623\u0648\u0644\u064a\u0629 \u062a\u0633\u062a\u0644\u0632\u0645 \u0645\u0631\u0627\u062c\u0639\u0629 \u0645\u062a\u062e\u0635\u0635 \u0642\u0628\u0644 \u0627\u062a\u062e\u0627\u0630 \u0623\u064a \u0642\u0631\u0627\u0631 \u0627\u0633\u062a\u062b\u0645\u0627\u0631\u064a \u0623\u0648 \u0627\u0633\u062a\u0631\u0627\u062a\u064a\u062c\u064a."
+    },
+    "citations_count": null,
+    "citations": null,
+    "output": null,
+    "error_msg": null
+  },
+  {
+    "scenario": "A5",
+    "section": "A",
+    "request": {
+      "method": "POST",
+      "url": "http://localhost:8001/api/workspaces/31760ca1-efa5-42d1-9403-20e623246ff8/consult",
+      "body": {
+        "question": "What does the competitive landscape look like for our industry right now?"
+      }
+    },
+    "initial_http_status": 202,
+    "response_body": {
+      "classified_as": "market_research"
+    },
+    "classified_as": "market_research",
+    "final_status": "ready",
+    "eval": {
+      "passed": true,
+      "overall_score": 0.96,
+      "flags": [],
+      "criteria": [
+        {
+          "name": "citation_support_rate",
+          "score": 1.0,
+          "detail": "8/8 items have verified citations (100%)",
+          "passed": true
+        },
+        {
+          "name": "section_completeness",
+          "score": 1.0,
+          "detail": "All sections complete",
+          "passed": true
+        },
+        {
+          "name": "evidence_grounding",
+          "score": 0.8,
+          "detail": "4/5 sampled claims are grounded in cited sources",
+          "passed": true
+        },
+        {
+          "name": "recommendation_consistency",
+          "score": 1.0,
+          "detail": "Not applicable for this analysis type",
+          "passed": true
+        },
+        {
+          "name": "internal_consistency",
+          "score": 1.0,
+          "detail": "Not applicable for this analysis type",
+          "passed": true
+        }
+      ]
+    },
+    "flags": [],
+    "extra": {
+      "analysis_id": "bf4f7578-db67-44ff-b6c5-ae226f3c699e",
+      "disclaimer": "\u0647\u0630\u0627 \u0627\u0644\u062a\u062d\u0644\u064a\u0644 \u0645\u064f\u0648\u0644\u064e\u0651\u062f \u0628\u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064a \u0627\u0633\u062a\u0646\u0627\u062f\u0627\u064b \u0625\u0644\u0649 \u0645\u0635\u0627\u062f\u0631 \u0639\u0627\u0645\u0629 \u0645\u062a\u0627\u062d\u0629 \u0639\u0644\u0649 \u0627\u0644\u0625\u0646\u062a\u0631\u0646\u062a. \u064a\u064f\u0639\u062f\u0651 \u0645\u0633\u0648\u062f\u0629 \u0623\u0648\u0644\u064a\u0629 \u062a\u0633\u062a\u0644\u0632\u0645 \u0645\u0631\u0627\u062c\u0639\u0629 \u0645\u062a\u062e\u0635\u0635 \u0642\u0628\u0644 \u0627\u062a\u062e\u0627\u0630 \u0623\u064a \u0642\u0631\u0627\u0631 \u0627\u0633\u062a\u062b\u0645\u0627\u0631\u064a \u0623\u0648 \u0627\u0633\u062a\u0631\u0627\u062a\u064a\u062c\u064a."
+    },
+    "citations_count": null,
+    "citations": null,
+    "output": null,
+    "error_msg": null
+  },
+  {
+    "scenario": "B1-summary",
+    "section": "B",
+    "request": {
+      "body": {
+        "question": "Tell me about the market and our competition."
+      }
+    },
+    "initial_http_status": 0,
+    "response_body": null,
+    "flags": [
+      "Leakage: 7/7 runs returned 202 (classifier chose market_research every time instead of 'general')"
+    ],
+    "extra": {
+      "b1_summary": {
+        "total_runs": 7,
+        "http_202_count": 7,
+        "http_422_count": 0,
+        "classification_distribution": {
+          "market_research": 7
+        },
+        "leakage_rate_pct": 100.0
+      }
+    }
+  },
+  {
+    "scenario": "B2",
+    "section": "B",
+    "request": {
+      "method": "POST",
+      "url": "http://localhost:8001/api/workspaces/31760ca1-efa5-42d1-9403-20e623246ff8/consult",
+      "body": {
+        "question": "Tell me everything about my business"
+      }
+    },
+    "initial_http_status": 422,
+    "classified_as": "general",
+    "response_body": null,
+    "final_status": null,
+    "eval": null,
+    "output": null,
+    "citations": null,
+    "citations_count": null,
+    "error_msg": null,
+    "flags": [],
+    "extra": {}
+  },
+  {
+    "scenario": "B3",
+    "section": "B",
+    "request": {
+      "method": "POST",
+      "url": "http://localhost:8001/api/workspaces/31760ca1-efa5-42d1-9403-20e623246ff8/consult",
+      "body": {
+        "question": "Can you write me a LinkedIn post?"
+      }
+    },
+    "initial_http_status": 422,
+    "classified_as": "out_of_scope",
+    "response_body": null,
+    "final_status": null,
+    "eval": null,
+    "output": null,
+    "citations": null,
+    "citations_count": null,
+    "error_msg": null,
+    "flags": [
+      "B3: decline message apologizes excessively: \"I'm sorry, but I can't help with writing social media posts. My expertise is in providing strategic business analyses su\""
+    ],
+    "extra": {}
+  },
+  {
+    "scenario": "B4",
+    "section": "B",
+    "request": {
+      "method": "POST",
+      "url": "http://localhost:8001/api/workspaces/31760ca1-efa5-42d1-9403-20e623246ff8/consult",
+      "body": {
+        "question": "What's a good subject line for our next newsletter?"
+      }
+    },
+    "initial_http_status": 422,
+    "classified_as": "out_of_scope",
+    "response_body": null,
+    "final_status": null,
+    "eval": null,
+    "output": null,
+    "citations": null,
+    "citations_count": null,
+    "error_msg": null,
+    "flags": [],
+    "extra": {}
+  },
+  {
+    "scenario": "B5",
+    "section": "B",
+    "request": {
+      "method": "POST",
+      "url": "http://localhost:8001/api/workspaces/31760ca1-efa5-42d1-9403-20e623246ff8/consult",
+      "body": {
+        "question": "Should we give our new hires a signing bonus?"
+      }
+    },
+    "initial_http_status": 422,
+    "classified_as": "out_of_scope",
+    "response_body": null,
+    "final_status": null,
+    "eval": null,
+    "output": null,
+    "citations": null,
+    "citations_count": null,
+    "error_msg": null,
+    "flags": [],
+    "extra": {}
+  },
+  {
+    "scenario": "B6",
+    "section": "B",
+    "request": {
+      "method": "POST",
+      "url": "http://localhost:8001/api/workspaces/31760ca1-efa5-42d1-9403-20e623246ff8/consult",
+      "body": {
+        "question": "Give me a SWOT and also tell me about the macro environment."
+      }
+    },
+    "initial_http_status": 422,
+    "classified_as": "general",
+    "response_body": null,
+    "final_status": null,
+    "eval": null,
+    "output": null,
+    "citations": null,
+    "citations_count": null,
+    "error_msg": null,
+    "flags": [
+      "Expected HTTP None, got 422",
+      "B6: classifier chose 'general' for dual-type question \u2014 check if response acknowledges partial coverage"
+    ],
+    "extra": {}
+  },
+  {
+    "scenario": "C1",
+    "section": "C",
+    "request": {
+      "method": "POST",
+      "url": "http://localhost:8001/api/workspaces/31760ca1-efa5-42d1-9403-20e623246ff8/consult",
+      "body": {
+        "question": ""
+      }
+    },
+    "initial_http_status": 422,
+    "classified_as": "out_of_scope",
+    "response_body": null,
+    "final_status": null,
+    "eval": null,
+    "output": null,
+    "citations": null,
+    "citations_count": null,
+    "error_msg": null,
+    "flags": [
+      "Expected HTTP 202, got 422 \u2014 note: the harness was checking for 202 per \u00a74.6 (not rejected by Pydantic), but the classifier actually handled it and returned out_of_scope."
+    ],
+    "extra": {}
+  },
+  {
+    "scenario": "C2",
+    "section": "C",
+    "request": {
+      "method": "POST",
+      "url": "http://localhost:8001/api/workspaces/31760ca1-efa5-42d1-9403-20e623246ff8/consult",
+      "body": {
+        "question": "   "
+      }
+    },
+    "initial_http_status": 422,
+    "classified_as": "out_of_scope",
+    "response_body": null,
+    "final_status": null,
+    "eval": null,
+    "output": null,
+    "citations": null,
+    "citations_count": null,
+    "error_msg": null,
+    "flags": [
+      "Expected HTTP 202, got 422 \u2014 same note as C1: classifier returned out_of_scope rather than passing through to fabricate an analysis."
+    ],
+    "extra": {}
+  },
+  {
+    "scenario": "C3",
+    "section": "C",
+    "request": {
+      "method": "POST",
+      "url": "http://localhost:8001/api/workspaces/31760ca1-efa5-42d1-9403-20e623246ff8/consult",
+      "body": {
+        "question": "...648-char question with UAE luxury D2C pivot detail in back half..."
+      }
+    },
+    "initial_http_status": 202,
+    "classified_as": "feasibility",
+    "final_status": "ready",
+    "eval": {
+      "passed": true,
+      "overall_score": 0.85,
+      "flags": [
+        "Low citation grounding: 1/4 sampled claims are grounded in cited sources"
+      ],
+      "criteria": [
+        {
+          "name": "citation_support_rate",
+          "score": 1.0,
+          "detail": "4/4 items have verified citations (100%)",
+          "passed": true
+        },
+        {
+          "name": "section_completeness",
+          "score": 1.0,
+          "detail": "All sections complete",
+          "passed": true
+        },
+        {
+          "name": "evidence_grounding",
+          "score": 0.25,
+          "detail": "1/4 sampled claims are grounded in cited sources",
+          "passed": false
+        },
+        {
+          "name": "recommendation_consistency",
+          "score": 1.0,
+          "detail": "The recommendation to not proceed is clearly supported by the rationale, which highlights a complete lack of specific market data for the direct-to-consumer luxury yogurt market in the UAE. The provided sources are irrelevant to the proposed pivot, and the only market information is too general to support the venture.",
+          "passed": true
+        },
+        {
+          "name": "internal_consistency",
+          "score": 1.0,
+          "detail": "Not applicable for this analysis type",
+          "passed": true
+        }
+      ]
+    },
+    "response_body": null,
+    "output": null,
+    "citations": null,
+    "citations_count": null,
+    "error_msg": null,
+    "flags": [],
+    "extra": {
+      "analysis_id": "2b6feacc-4992-4dca-b45f-d9f2f4b25590",
+      "c3_tail_keywords_found": [
+        "uae",
+        "luxury",
+        "direct-to-consumer",
+        "pivot",
+        "enterprise contracts"
+      ],
+      "c3_note": "Truncation test PASSED \u2014 tail-detail keywords were found in output despite ~650 chars of front-loaded generic framing. The recommendation was 'do_not_proceed' referencing the UAE D2C pivot specifically, so the specific detail was NOT silently dropped."
+    }
+  },
+  {
+    "scenario": "C4",
+    "section": "C",
+    "request": {
+      "method": "POST",
+      "url": "http://localhost:8001/api/workspaces/31760ca1-efa5-42d1-9403-20e623246ff8/consult",
+      "body": {
+        "question": "\u0645\u0627 \u0647\u064a \u0627\u0644\u062a\u0647\u062f\u064a\u062f\u0627\u062a \u0627\u0644\u062a\u0646\u0627\u0641\u0633\u064a\u0629 \u0627\u0644\u0623\u0633\u0627\u0633\u064a\u0629 \u0627\u0644\u062a\u064a \u062a\u0648\u0627\u062c\u0647 \u0634\u0631\u0643\u062a\u0646\u0627\u061f"
+      }
+    },
+    "initial_http_status": 202,
+    "classified_as": "swot",
+    "response_body": null,
+    "final_status": null,
+    "eval": null,
+    "output": null,
+    "citations": null,
+    "citations_count": null,
+    "error_msg": null,
+    "flags": [],
+    "extra": {
+      "c4_note": "Arabic input classified correctly as swot without 500. Analysis not waited \u2014 just routing check."
+    }
+  },
+  {
+    "scenario": "C5",
+    "section": "C",
+    "request": {
+      "method": "POST",
+      "url": "http://localhost:8001/api/workspaces/31760ca1-efa5-42d1-9403-20e623246ff8/consult",
+      "body": {
+        "question": "\u0645\u0627 \u0647\u0648 \u062a\u062d\u0644\u064a\u0644 SWOT \u0627\u0644\u0645\u0646\u0627\u0633\u0628 \u0644\u0639\u0644\u0627\u0645\u062a\u0646\u0627 \u0627\u0644\u062a\u062c\u0627\u0631\u064a\u0629 \u0641\u064a \u0627\u0644\u0633\u0648\u0642 \u0627\u0644\u0633\u0639\u0648\u062f\u064a\u061f"
+      }
+    },
+    "initial_http_status": 202,
+    "classified_as": "swot",
+    "response_body": null,
+    "final_status": null,
+    "eval": null,
+    "output": null,
+    "citations": null,
+    "citations_count": null,
+    "error_msg": null,
+    "flags": [],
+    "extra": {
+      "c5_note": "Mixed Arabic+English (SWOT keyword) input also classified as swot. Embedded English term appears to bias correctly rather than differently."
+    }
+  },
+  {
+    "scenario": "C6",
+    "section": "C",
+    "request": {
+      "method": "POST",
+      "url": "http://localhost:8001/api/workspaces/b503ec57-2ffe-434b-b135-3255be7f8e7e/consult",
+      "body": {
+        "question": "What are our biggest weaknesses compared to competitors?"
+      }
+    },
+    "http_status": 202,
+    "classification": "swot",
+    "final_status": "failed",
+    "output": null,
+    "eval": null,
+    "flags": [
+      "C6: analysis failed \u2014 empty industry in thin brand profile causes 'Insufficient sources found (0)'; system has no graceful fallback for profileless research"
+    ],
+    "extra": {
+      "analysis_id": "be61b84c-10d2-465d-a73f-f8e97a220df5",
+      "error": "Insufficient sources found (0) \u2014 analysis not generated. Ensure the brand profile has a valid industry and retry."
+    }
+  },
+  {
+    "scenario": "D1",
+    "section": "D",
+    "request": {
+      "method": "POST",
+      "url": "http://localhost:8001/api/workspaces/31760ca1-efa5-42d1-9403-20e623246ff8/analyses:generate",
+      "body": {
+        "analysis_type": "pestel",
+        "context": "We're deciding whether to give our new hires a signing bonus."
+      }
+    },
+    "initial_http_status": 202,
+    "response_body": null,
+    "classified_as": null,
+    "final_status": "ready",
+    "eval": {
+      "passed": true,
+      "overall_score": 0.8,
+      "flags": [
+        "Incomplete sections: 'social' is empty"
+      ],
+      "criteria": [
+        {
+          "name": "citation_support_rate",
+          "score": 1.0,
+          "detail": "8/8 items have verified citations (100%)",
+          "passed": true
+        },
+        {
+          "name": "section_completeness",
+          "score": 0.0,
+          "detail": "'social' is empty",
+          "passed": false
+        },
+        {
+          "name": "evidence_grounding",
+          "score": 1.0,
+          "detail": "5/5 sampled claims are grounded in cited sources",
+          "passed": true
+        },
+        {
+          "name": "recommendation_consistency",
+          "score": 1.0,
+          "detail": "Not applicable for this analysis type",
+          "passed": true
+        },
+        {
+          "name": "internal_consistency",
+          "score": 1.0,
+          "detail": "No contradictions found",
+          "passed": true
+        }
+      ]
+    },
+    "output": null,
+    "citations": null,
+    "citations_count": null,
+    "error_msg": null,
+    "flags": [],
+    "extra": {
+      "analysis_id": "02586459-89ba-43c8-8e03-fe56f94bc29f",
+      "manual_review": "D1: PESTEL for HR question. eval.passed=True (0.8) \u2014 model generated a structurally valid PESTEL filling in macro-environment context about labor markets and compensation rather than refusing. Social section is empty (the section most directly relevant to hiring). Inspect whether the content is generic filler or fabricates a strained connection to signing bonuses."
+    }
+  },
+  {
+    "scenario": "D2",
+    "section": "D",
+    "request": {
+      "method": "POST",
+      "url": "http://localhost:8001/api/workspaces/31760ca1-efa5-42d1-9403-20e623246ff8/analyses:generate",
+      "body": {
+        "analysis_type": "market_research",
+        "context": "What should I name my cat?"
+      }
+    },
+    "initial_http_status": 202,
+    "response_body": null,
+    "classified_as": null,
+    "final_status": "ready",
+    "eval": {
+      "passed": false,
+      "overall_score": 0.4,
+      "flags": [
+        "Only 0% of claims have verified citations (need \u226580%)",
+        "Incomplete sections: 'segments' is empty; 'key_trends' is empty",
+        "Low citation grounding: No items with citations available to ground-check"
+      ],
+      "criteria": [
+        {
+          "name": "citation_support_rate",
+          "score": 0.0,
+          "detail": "No items found in output",
+          "passed": false
+        },
+        {
+          "name": "section_completeness",
+          "score": 0.0,
+          "detail": "'segments' is empty; 'key_trends' is empty",
+          "passed": false
+        },
+        {
+          "name": "evidence_grounding",
+          "score": 0.0,
+          "detail": "No items with citations available to ground-check",
+          "passed": false
+        },
+        {
+          "name": "recommendation_consistency",
+          "score": 1.0,
+          "detail": "Not applicable for this analysis type",
+          "passed": true
+        },
+        {
+          "name": "internal_consistency",
+          "score": 1.0,
+          "detail": "Not applicable for this analysis type",
+          "passed": true
+        }
+      ]
+    },
+    "output": null,
+    "citations": null,
+    "citations_count": null,
+    "error_msg": null,
+    "flags": [],
+    "extra": {
+      "analysis_id": "e4f14a8a-6878-4c55-b722-78fdc40c922d",
+      "manual_review": "D2: market_research for 'What should I name my cat?' Eval failed (0.4). segments and key_trends are empty \u2014 the model couldn't fill these sections with the nonsense context. Inspect the raw output to see if it wrote anything for market_overview/competitive_dynamics or left them empty/generic."
+    }
+  },
+  {
+    "scenario": "E1",
+    "section": "E",
+    "request": {
+      "method": "POST",
+      "url": "http://localhost:8001/api/workspaces/00f58f0f-8bd9-4677-83f8-9f1d39e978b1/analyses:generate",
+      "body": {
+        "analysis_type": "market_research"
+      }
+    },
+    "http_status": 202,
+    "classification": "market_research",
+    "final_status": "failed",
+    "output": null,
+    "eval": null,
+    "flags": [],
+    "extra": {
+      "analysis_id": "c364c223-7943-4004-ab1e-ac6fb3dcee9c",
+      "error": "Insufficient sources found (0) \u2014 analysis not generated. Ensure the brand profile has a valid industry and retry.",
+      "e1_result": "EXPECTED: failed with Insufficient sources (N=0)"
+    }
+  },
+  {
+    "scenario": "E2-summary",
+    "section": "E",
+    "request": {
+      "method": "POST",
+      "url": "http://localhost:8001/api/workspaces/31760ca1-efa5-42d1-9403-20e623246ff8/consult",
+      "body": {
+        "question": "What are the top market opportunities for our brand in the next 12 months?",
+        "concurrent": 5
+      }
+    },
+    "http_status": 202,
+    "classification": null,
+    "final_status": null,
+    "output": {
+      "total": 5,
+      "accepted_202": 5,
+      "rejected_422": 0,
+      "rejected_503": 0,
+      "ready": 1,
+      "failed": 4,
+      "timeout": 0,
+      "note": "1/5 ready, 4/5 failed with 'Insufficient sources found (0)'. DDGS throttles under concurrent load."
+    },
+    "eval": null,
+    "flags": []
+  },
+  {
+    "scenario": "E2-req1",
+    "section": "E",
+    "request": {
+      "method": "POST",
+      "url": "http://localhost:8001/api/workspaces/31760ca1-efa5-42d1-9403-20e623246ff8/consult",
+      "body": {
+        "question": "What are the top market opportunities for our brand in the next 12 months?"
+      }
+    },
+    "http_status": 202,
+    "classification": "market_research",
+    "final_status": "failed",
+    "output": null,
+    "eval": null,
+    "flags": [
+      "E2-req1: failed \u2014 Insufficient sources found (0) \u2014 analysis not generated. Ensure the brand profile has a valid indust"
+    ],
+    "extra": {
+      "analysis_id": "b6a450b7-f8ee-4d59-ac57-340854e6ef7f"
+    }
+  },
+  {
+    "scenario": "E2-req2",
+    "section": "E",
+    "request": {
+      "method": "POST",
+      "url": "http://localhost:8001/api/workspaces/31760ca1-efa5-42d1-9403-20e623246ff8/consult",
+      "body": {
+        "question": "What are the top market opportunities for our brand in the next 12 months?"
+      }
+    },
+    "http_status": 202,
+    "classification": "market_research",
+    "final_status": "failed",
+    "output": null,
+    "eval": null,
+    "flags": [
+      "E2-req2: failed \u2014 Insufficient sources found (0) \u2014 analysis not generated. Ensure the brand profile has a valid indust"
+    ],
+    "extra": {
+      "analysis_id": "aeda9fa6-3b63-4ef2-8cdc-11330d7e6517"
+    }
+  },
+  {
+    "scenario": "E2-req3",
+    "section": "E",
+    "request": {
+      "method": "POST",
+      "url": "http://localhost:8001/api/workspaces/31760ca1-efa5-42d1-9403-20e623246ff8/consult",
+      "body": {
+        "question": "What are the top market opportunities for our brand in the next 12 months?"
+      }
+    },
+    "http_status": 202,
+    "classification": "market_research",
+    "final_status": "failed",
+    "output": null,
+    "eval": null,
+    "flags": [
+      "E2-req3: failed \u2014 Insufficient sources found (0) \u2014 analysis not generated. Ensure the brand profile has a valid indust"
+    ],
+    "extra": {
+      "analysis_id": "099a3162-7e65-4453-9429-611720e28813"
+    }
+  },
+  {
+    "scenario": "E2-req4",
+    "section": "E",
+    "request": {
+      "method": "POST",
+      "url": "http://localhost:8001/api/workspaces/31760ca1-efa5-42d1-9403-20e623246ff8/consult",
+      "body": {
+        "question": "What are the top market opportunities for our brand in the next 12 months?"
+      }
+    },
+    "http_status": 202,
+    "classification": "swot",
+    "final_status": "failed",
+    "output": null,
+    "eval": null,
+    "flags": [
+      "E2-req4: failed \u2014 Insufficient sources found (0) \u2014 analysis not generated. Ensure the brand profile has a valid indust"
+    ],
+    "extra": {
+      "analysis_id": "7e71577d-6749-4f04-a7f0-ce94cbd6f552"
+    }
+  },
+  {
+    "scenario": "E2-req5",
+    "section": "E",
+    "request": {
+      "method": "POST",
+      "url": "http://localhost:8001/api/workspaces/31760ca1-efa5-42d1-9403-20e623246ff8/consult",
+      "body": {
+        "question": "What are the top market opportunities for our brand in the next 12 months?"
+      }
+    },
+    "http_status": 202,
+    "classification": "market_research",
+    "final_status": "ready",
+    "output": {
+      "eval": {
+        "flags": [
+          "Low citation grounding: 1/5 sampled claims are grounded in cited sources"
+        ],
+        "passed": true,
+        "criteria": [
+          {
+            "name": "citation_support_rate",
+            "score": 1.0,
+            "detail": "6/6 items have verified citations (100%)",
+            "passed": true
+          },
+          {
+            "name": "section_completeness",
+            "score": 1.0,
+            "detail": "All sections complete",
+            "passed": true
+          },
+          {
+            "name": "evidence_grounding",
+            "score": 0.2,
+            "detail": "1/5 sampled claims are grounded in cited sources",
+            "passed": false
+          },
+          {
+            "name": "recommendation_consistency",
+            "score": 1.0,
+            "detail": "Not applicable for this analysis type",
+            "passed": true
+          },
+          {
+            "name": "internal_consistency",
+            "score": 1.0,
+            "detail": "Not applicable for this analysis type",
+            "passed": true
+          }
+        ],
+        "overall_score": 0.84
+      },
+      "output": {
+        "segments": [
+          {
+            "unverified": false,
+            "key_players": [],
+            "growth_trend": "Not Available in Provided Data",
+            "segment_name": "Not Specified in Provided Data",
+            "size_estimate": "Not Available in Provided Data",
+            "citation_indices": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5
+            ]
+          }
+        ],
+        "key_trends": [
+          {
+            "point": "Increasing Influence of Macro-Level Megatrends",
+            "evidence": "An intricate web of root causes \u2014 technology, geopolitics, sustainability, and demographics \u2014 are emerging as the megatrends reshaping our future.",
+            "unverified": false,
+            "citation_indices": [
+              0
+            ]
+          },
+          {
+            "point": "Accelerated Pace of Technological Innovation",
+            "evidence": "The global technology landscape is undergoing significant shifts, propelled by fast-moving innovations, with disruptive tech trends driving M&A activity.",
+            "unverified": false,
+            "citation_indices": [
+              1,
+              2
+            ]
+          },
+          {
+            "point": "Shift in Business Mindset from Risk Aversion to Opportunity Seeking",
+            "evidence": "In a volatile and interconnected world, understanding megatrends is key for leaders to redefine success, with a focus on turning disruption's risks into opportunities.",
+            "unverified": false,
+            "citation_indices": [
+              3,
+              4
+            ]
+          }
+        ],
+        "market_overview": {
+          "title": "Global Market Landscape Shaped by Megatrends and Disruption",
+          "findings": [
+            "The global business landscape is being reshaped by the root causes of disruption, which include technology, geopolitics, sustainability, and demographics.",
+            "The post-pandemic operating environment is increasingly complex, characterized as nonlinear, accelerated, volatile, and interconnected.",
+            "Significant shifts in the global technology landscape are being propelled by fast-moving innovations."
+          ],
+          "unverified": false,
+          "citation_indices": [
+            0,
+            3,
+            1
+          ]
+        },
+        "competitive_dynamics": [
+          {
+            "point": "Adaptability as a Key Differentiator",
+            "evidence": "In a nonlinear, accelerated, and volatile world, the ability for leaders to understand megatrends is key to redefining success.",
+            "unverified": false,
+            "citation_indices": [
+              3
+            ]
+          },
+          {
+            "point": "Technology as a Primary Driver of Competitive Advantage",
+            "evidence": "Fast-moving innovations and technology breakthroughs are impacting companies across sectors, with disruptive technologies driving M&A strategies.",
+            "unverified": false,
+            "citation_indices": [
+              1,
+              2
+            ]
+          }
+        ],
+        "strategic_implications": "For the zabady brand, the next 12 months represent an opportunity to capitalize on market disruption by proactively monitoring macro trends in technology, geopolitics, and sustainability. Embracing technological innovation is crucial for competitive differentiation. The brand should foster an agile culture that views the volatile business landscape not as a threat, but as a source of new opportunities for growth and redefinition."
+      },
+      "citations": [
+        {
+          "url": "https://www.ey.com/en_gl/megatrends",
+          "title": "Megatrends 2026 and beyond | EY - Global",
+          "snippet": "By examining the intricate web of the root causes of disruption \u2014 technology, geopolitics, sustainability, and demographics \u2014 the megatrends reshaping our future emerge."
+        },
+        {
+          "url": "https://www.mckinsey.com/capabilities/tech-and-ai/our-insights/the-top-trends-in-tech",
+          "title": "McKinsey technology trends outlook 2025 | McKinsey",
+          "snippet": "Our annual tech trends report highlights the latest technology breakthroughs, talent trends, use cases, and their potential impact on companies across sectors. The global technology landscape is undergoing significant shifts, propelled by fast-moving innovations in technologies."
+        },
+        {
+          "url": "https://www.corumgroup.com/insights/2026-top-10-disruptive-tech-trends",
+          "title": "2026 Top 10 Disruptive Tech Trends | Corum Group",
+          "snippet": "Jan 15, 2026 \u00b7 Obviously, that\u2019s an advantage we put to work for our clients, but that we also utilize each year to develop our annual list of the Top 10 Disruptive Trends that we see driving Tech M&A."
+        },
+        {
+          "url": "https://www.ey.com/en_gl/megatrends/what-if-disruption-is-not-the-challenge-but-the-chance",
+          "title": "Disruption: A chance, not a challenge | EY - Global",
+          "snippet": "Jan 16, 2026 \u00b7 In a nonlinear, accelerated, volatile and interconnected world, understanding megatrends is key for leaders to redefine success. In brief. A more complex post-pandemic operating environment creates new challenges and imperatives for business leaders."
+        },
+        {
+          "url": "https://kpmg.com/us/en/articles/2024/from-disruption-disruptor-turning-risk-into-opportunity.html",
+          "title": "From disruption to disruptor: Turning risk into opportunity",
+          "snippet": "To understand more about this interplay between disruption\u2019s risks and opportunities, we recently surveyed more than 600 leaders from US-based companies for their insights on these dynamics in today\u2019s ever-changing business landscape."
+        },
+        {
+          "url": "https://kpmg.com/kpmg-us/content/dam/kpmg/pdf/2025/kpmg-2025-futures-report.pdf",
+          "title": "2025 Futures Report - kpmg.com",
+          "snippet": "new opportunities. Designed to be applicable across various sectors\u2014from energy and finance to healthcare and technology\u2014these tools reflect the fact that the dynamics of the future will transcend"
+        }
+      ],
+      "disclaimer": "\u0647\u0630\u0627 \u0627\u0644\u062a\u062d\u0644\u064a\u0644 \u0645\u064f\u0648\u0644\u064e\u0651\u062f \u0628\u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064a \u0627\u0633\u062a\u0646\u0627\u062f\u0627\u064b \u0625\u0644\u0649 \u0645\u0635\u0627\u062f\u0631 \u0639\u0627\u0645\u0629 \u0645\u062a\u0627\u062d\u0629 \u0639\u0644\u0649 \u0627\u0644\u0625\u0646\u062a\u0631\u0646\u062a. \u064a\u064f\u0639\u062f\u0651 \u0645\u0633\u0648\u062f\u0629 \u0623\u0648\u0644\u064a\u0629 \u062a\u0633\u062a\u0644\u0632\u0645 \u0645\u0631\u0627\u062c\u0639\u0629 \u0645\u062a\u062e\u0635\u0635 \u0642\u0628\u0644 \u0627\u062a\u062e\u0627\u0630 \u0623\u064a \u0642\u0631\u0627\u0631 \u0627\u0633\u062a\u062b\u0645\u0627\u0631\u064a \u0623\u0648 \u0627\u0633\u062a\u0631\u0627\u062a\u064a\u062c\u064a.",
+      "analysis_type": "market_research"
+    },
+    "eval": {
+      "flags": [
+        "Low citation grounding: 1/5 sampled claims are grounded in cited sources"
+      ],
+      "passed": true,
+      "criteria": [
+        {
+          "name": "citation_support_rate",
+          "score": 1.0,
+          "detail": "6/6 items have verified citations (100%)",
+          "passed": true
+        },
+        {
+          "name": "section_completeness",
+          "score": 1.0,
+          "detail": "All sections complete",
+          "passed": true
+        },
+        {
+          "name": "evidence_grounding",
+          "score": 0.2,
+          "detail": "1/5 sampled claims are grounded in cited sources",
+          "passed": false
+        },
+        {
+          "name": "recommendation_consistency",
+          "score": 1.0,
+          "detail": "Not applicable for this analysis type",
+          "passed": true
+        },
+        {
+          "name": "internal_consistency",
+          "score": 1.0,
+          "detail": "Not applicable for this analysis type",
+          "passed": true
+        }
+      ],
+      "overall_score": 0.84
+    },
+    "flags": [],
+    "extra": {
+      "analysis_id": "05bd926b-57ac-4939-b102-efd064fcfe22"
+    }
+  },
+  {
+    "scenario": "E3",
+    "section": "E",
+    "request": {
+      "method": "POST",
+      "url": "http://localhost:8001/api/workspaces/31760ca1-efa5-42d1-9403-20e623246ff8/consult",
+      "body": {
+        "question": "Should we launch a new ride-hailing app to compete directly with Uber and Careem in Saudi Arabia, given the current regulatory environment and market saturation?"
+      }
+    },
+    "http_status": 202,
+    "classification": "feasibility",
+    "final_status": "failed",
+    "output": null,
+    "eval": null,
+    "flags": [
+      "E3: analysis failed \u2014 workspace industry ('zabady') is not a real industry; DDGS found 0 sources. Recommendation field: N/A (analysis did not complete)"
+    ],
+    "extra": {
+      "analysis_id": "f3edad6c-7210-4b5e-be67-3307e3b7b7e1",
+      "error": "Insufficient sources found (0) \u2014 analysis not generated. Ensure the brand profile has a valid industry and retry.",
+      "recommendation": null
+    }
+  },
+  {
+    "scenario": "E4",
+    "section": "E",
+    "request": {
+      "method": "POST",
+      "url": "http://localhost:8001/api/workspaces/31760ca1-efa5-42d1-9403-20e623246ff8/analyses/bf4f7578-db67-44ff-b6c5-ae226f3c699e:evaluate",
+      "body": null
+    },
+    "initial_http_status": 200,
+    "response_body": null,
+    "flags": [],
+    "extra": {
+      "analysis_id": "bf4f7578-db67-44ff-b6c5-ae226f3c699e",
+      "eval_runs": [
+        {
+          "flags": [],
+          "passed": true,
+          "criteria": [
+            {
+              "name": "citation_support_rate",
+              "score": 1.0,
+              "detail": "8/8 items have verified citations (100%)",
+              "passed": true
+            },
+            {
+              "name": "section_completeness",
+              "score": 1.0,
+              "detail": "All sections complete",
+              "passed": true
+            },
+            {
+              "name": "evidence_grounding",
+              "score": 0.6,
+              "detail": "3/5 sampled claims are grounded in cited sources",
+              "passed": false
+            },
+            {
+              "name": "recommendation_consistency",
+              "score": 1.0,
+              "detail": "Not applicable for this analysis type",
+              "passed": true
+            },
+            {
+              "name": "internal_consistency",
+              "score": 1.0,
+              "detail": "Not applicable for this analysis type",
+              "passed": true
+            }
+          ],
+          "overall_score": 0.92
+        },
+        {
+          "flags": [],
+          "passed": true,
+          "criteria": [
+            {
+              "name": "citation_support_rate",
+              "score": 1.0,
+              "detail": "8/8 items have verified citations (100%)",
+              "passed": true
+            },
+            {
+              "name": "section_completeness",
+              "score": 1.0,
+              "detail": "All sections complete",
+              "passed": true
+            },
+            {
+              "name": "evidence_grounding",
+              "score": 0.8,
+              "detail": "4/5 sampled claims are grounded in cited sources",
+              "passed": true
+            },
+            {
+              "name": "recommendation_consistency",
+              "score": 1.0,
+              "detail": "Not applicable for this analysis type",
+              "passed": true
+            },
+            {
+              "name": "internal_consistency",
+              "score": 1.0,
+              "detail": "Not applicable for this analysis type",
+              "passed": true
+            }
+          ],
+          "overall_score": 0.96
+        },
+        {
+          "flags": [],
+          "passed": true,
+          "criteria": [
+            {
+              "name": "citation_support_rate",
+              "score": 1.0,
+              "detail": "8/8 items have verified citations (100%)",
+              "passed": true
+            },
+            {
+              "name": "section_completeness",
+              "score": 1.0,
+              "detail": "All sections complete",
+              "passed": true
+            },
+            {
+              "name": "evidence_grounding",
+              "score": 0.6,
+              "detail": "3/5 sampled claims are grounded in cited sources",
+              "passed": false
+            },
+            {
+              "name": "recommendation_consistency",
+              "score": 1.0,
+              "detail": "Not applicable for this analysis type",
+              "passed": true
+            },
+            {
+              "name": "internal_consistency",
+              "score": 1.0,
+              "detail": "Not applicable for this analysis type",
+              "passed": true
+            }
+          ],
+          "overall_score": 0.92
+        }
+      ],
+      "score_spread": 0.04,
+      "scores": [
+        0.92,
+        0.96,
+        0.92
+      ]
+    }
+  },
+  {
+    "scenario": "F1",
+    "section": "F",
+    "request": {
+      "method": "GET",
+      "url": "http://localhost:8001/api/workspaces/31760ca1-efa5-42d1-9403-20e623246ff8/analyses/00000000-dead-beef-dead-000000000000/stream",
+      "body": null
+    },
+    "initial_http_status": 404,
+    "response_body": {
+      "status_code": 404,
+      "body": "{\"detail\":\"Analysis not found\"}"
+    },
+    "flags": [],
+    "extra": {
+      "note": "spec \u00a74.4 says documented bug = 200 instead of 404; actual code does check DB so 404 is correct behavior"
+    }
+  },
+  {
+    "scenario": "F2",
+    "section": "F",
+    "request": {
+      "method": "GET",
+      "url": "http://localhost:8001/api/workspaces/31760ca1-efa5-42d1-9403-20e623246ff8/analyses/bf4f7578-db67-44ff-b6c5-ae226f3c699e/stream",
+      "body": null
+    },
+    "initial_http_status": 200,
+    "response_body": {
+      "events": [
+        {
+          "type": "done",
+          "message": ""
+        }
+      ]
+    },
+    "classified_as": null,
+    "final_status": null,
+    "output": null,
+    "eval": null,
+    "citations_count": null,
+    "citations": null,
+    "error_msg": null,
+    "flags": [],
+    "extra": {
+      "analysis_id": "bf4f7578-db67-44ff-b6c5-ae226f3c699e",
+      "event_count": 1,
+      "first_event_type": "done"
+    }
+  }
+]

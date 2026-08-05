@@ -13,6 +13,8 @@ from app.models.enums import (
 from app.models.knowledge_chunk import KnowledgeChunk
 from app.models.knowledge_document import KnowledgeDocument
 from app.models.post import Post
+from app.models.consulting_analysis import ConsultingAnalysis
+from app.models.market_data_cache import MarketDataCache
 from app.models.workspace import Workspace
 
 __all__ = [
@@ -32,4 +34,6 @@ __all__ = [
     "AutonomyLevel",
     "OnboardingStatus",
     "DocumentStatus",
+    "ConsultingAnalysis",
+    "MarketDataCache",
 ]

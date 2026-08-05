@@ -121,3 +121,38 @@ export interface ChatSession {
 export interface ChatSessionDetail extends ChatSession {
   messages: ChatMessage[]
 }
+
+// ── visual blocks (emitted via `visuals` SSE event after `done`) ──────────────
+
+export type VisualType =
+  | 'bar_chart'
+  | 'line_chart'
+  | 'area_chart'
+  | 'table'
+  | 'metric_card'
+  | 'radar_chart'
+  | 'pie_chart'
+  | 'donut_chart'
+  | 'stacked_bar_chart'
+  | 'gauge'
+  | 'comparison_grid'
+  | 'timeline'
+  | 'word_cloud'
+  | 'progress_list'
+
+export interface VisualBlock {
+  type: VisualType
+  title: string
+  data: Record<string, unknown>
+}
+
+export interface SourceRef {
+  title: string
+  url: string
+  fetched_at: string
+}
+
+export interface ConsultVisuals {
+  visuals: VisualBlock[]
+  sources: SourceRef[]
+}

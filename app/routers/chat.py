@@ -241,18 +241,23 @@ async def stream_session(
         raise HTTPException(status_code=404, detail="Chat session not found")
 
     if not event_bus.exists(session_id):
+        # Stream already finished — send both terminal events so the frontend
+        # commits the message and closes cleanly regardless of arrival order.
         async def already_done():
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
+            yield f"data: {json.dumps({'type': 'stream_complete'})}\n\n"
         return StreamingResponse(already_done(), media_type="text/event-stream")
 
     async def generator():
         while True:
             event = await event_bus.read(session_id, timeout=25.0)
             if event is None:
-                yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                # Backend timed out without closing — signal client to close.
+                yield f"data: {json.dumps({'type': 'stream_complete'})}\n\n"
                 break
             yield f"data: {json.dumps(event)}\n\n"
-            if event.get("type") in ("done", "error"):
+            # stream_complete is the normal close signal; error closes immediately.
+            if event.get("type") in ("stream_complete", "error"):
                 break
 
     return StreamingResponse(

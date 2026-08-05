@@ -1,7 +1,10 @@
-"""Chat agent tools: brand knowledge search, web search, draft post creation, plan generation."""
+"""Chat agent tools: brand knowledge search, web search (Tavily), draft post creation,
+plan generation, and competitor market data lookup."""
 import asyncio
+import json
 import logging
 import uuid
+from typing import Literal
 
 from langchain_core.tools import tool
 from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -16,15 +19,10 @@ from app.services.knowledge_search import search_knowledge
 
 logger = logging.getLogger(__name__)
 
-
-def _ddg_search(query: str, max_results: int) -> list[dict]:
-    """Synchronous DuckDuckGo search — run via asyncio.to_thread."""
-    from ddgs import DDGS
-    with DDGS() as ddgs:
-        return list(ddgs.text(query, max_results=max_results))
-
 # Strong reference to prevent asyncio GC of fire-and-forget tasks.
 _background_tasks: set[asyncio.Task] = set()
+
+MetricType = Literal["followers", "engagement_rate", "pricing", "campaign", "recent_posts"]
 
 
 def make_chat_tools(
@@ -44,12 +42,20 @@ def make_chat_tools(
 
         Use this whenever the user asks about something external — competitors, market data,
         platform algorithms, trending topics, or anything that requires up-to-date information.
-        Prefer specific queries (e.g. "منافسو شركة X في مصر 2024") over vague ones.
+        Prefer specific queries (e.g. "competitor X Instagram following Egypt 2025") over vague ones.
         """
+        from app.config import settings
+
+        if not settings.tavily_api_key:
+            return "Web search unavailable: TAVILY_API_KEY is not configured."
+
         try:
-            results = await asyncio.to_thread(_ddg_search, query, 6)
+            from tavily import AsyncTavilyClient
+            client = AsyncTavilyClient(api_key=settings.tavily_api_key.get_secret_value())
+            response = await client.search(query, max_results=6)
+            results = response.get("results", [])
         except Exception as exc:
-            logger.warning("DuckDuckGo search failed for %r: %s", query, exc)
+            logger.warning("Tavily search failed for %r: %s", query, exc)
             return f"Web search temporarily unavailable: {exc}"
 
         if not results:
@@ -58,10 +64,44 @@ def make_chat_tools(
         lines = [f"Web search results for: {query}\n"]
         for i, r in enumerate(results, 1):
             title = r.get("title", "")
-            body = r.get("body", "")[:300]
-            href = r.get("href", "")
-            lines.append(f"{i}. **{title}**\n   {body}\n   Source: {href}")
+            content = r.get("content", "")[:300]
+            url = r.get("url", "")
+            lines.append(f"{i}. **{title}**\n   {content}\n   Source: {url}")
         return "\n\n".join(lines)
+
+    @tool
+    async def get_market_data(competitor_name: str, metric_type: MetricType) -> str:
+        """Look up cached or live competitor data. Uses a local cache first (TTL varies
+        by metric) and only calls the web when the cache is missing or stale.
+
+        Use this for specific competitor metrics instead of web_search when possible —
+        results include a staleness flag so you can communicate data freshness to the user.
+
+        competitor_name: exact brand name as known in the market (e.g. "Competitor X").
+        metric_type: one of followers, engagement_rate, pricing, campaign, recent_posts.
+        """
+        from app.config import settings
+        from app.services.market_awareness import get_market_data as _get
+
+        if not settings.tavily_api_key:
+            return json.dumps({
+                "value": None,
+                "unavailable": True,
+                "message": "Market data unavailable: TAVILY_API_KEY is not configured.",
+            })
+
+        industry = brand_profile.get("industry") or "general"
+
+        async with session_factory() as db:
+            result = await _get(
+                workspace_id=workspace_id,
+                competitor_name=competitor_name,
+                metric_type=metric_type,
+                industry=industry,
+                tavily_api_key=settings.tavily_api_key.get_secret_value(),
+                db=db,
+            )
+        return json.dumps(result, default=str)
 
     @tool
     async def search_brand_knowledge(query: str) -> str:
@@ -74,7 +114,7 @@ def make_chat_tools(
             chunks = await search_knowledge(query, workspace_id, db, k=3)
         if not chunks:
             return "No relevant knowledge found for that query."
-        return "\n---\n".join(c.text for c in chunks)
+        return "\n---\n".join(c.content for c in chunks)
 
     @tool
     async def create_draft_post(
@@ -137,6 +177,12 @@ def make_chat_tools(
 
         return f"Plan generation started. Plan ID: {plan_id}"
 
-    tools = [web_search, search_brand_knowledge, create_draft_post, trigger_plan_generation]
+    tools = [
+        web_search,
+        get_market_data,
+        search_brand_knowledge,
+        create_draft_post,
+        trigger_plan_generation,
+    ]
     tool_map = {t.name: t for t in tools}
     return tools, tool_map

@@ -10,7 +10,8 @@ import {
   sendChatMessage,
   submitDraftPost,
 } from '../api'
-import type { ChatMessage, ChatSession, ChatSessionDetail } from '../types'
+import type { ChatMessage, ChatSession, ChatSessionDetail, ConsultVisuals } from '../types'
+import VisualRenderer from '../components/VisualRenderer'
 
 const BASE = import.meta.env.VITE_API_URL ?? ''
 
@@ -79,10 +80,18 @@ export default function ChatPage() {
   const [meetingPhase, setMeetingPhase] = useState<MeetingPhase>('idle')
   const [liveAgentMessages, setLiveAgentMessages] = useState<LiveAgentMessage[]>([])
 
+  const [visualsByMessageId, setVisualsByMessageId] = useState<Record<string, ConsultVisuals>>({})
+
   const esRef = useRef<EventSource | null>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const currentStreamRef = useRef('')
   const currentAgentRef = useRef<CurrentAgent | null>(null)
+  // Holds the ID of the last committed assistant message so the visuals event
+  // handler can attach to the correct message even if the user sends a new
+  // message between `done` and `visuals` arriving.
+  const lastCommittedMessageIdRef = useRef<string | null>(null)
+  // Safety-net timer: if stream_complete never arrives after done, close after 20s.
+  const streamCompleteTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     if (!wsId) return
@@ -153,21 +162,72 @@ export default function ChatPage() {
       } else if (ev.type === 'synthesis_end') {
         const content = currentStreamRef.current
         if (content) setLiveAgentMessages(prev => [...prev, { agentId: 'chief_of_staff', agentName: 'Casey', content }])
-        currentStreamRef.current = ''; setStreamingContent('')
+        currentStreamRef.current = ''
 
-      } else if (ev.type === 'done' || ev.type === 'error') {
-        es.close(); esRef.current = null; resetStreamState()
+      } else if (ev.type === 'done') {
+        // Text is ready — commit message bubble but keep connection open.
+        // Capture the message ID from the session fetch so the visuals event
+        // can attach to the right message even if the user sends another message
+        // before stream_complete arrives.
         if (wsId && sid) {
           getChatSession(wsId, sid).then(d => {
-            setDetail(d); listChatSessions(wsId).then(setSessions).catch(() => {})
-          })
+            setDetail(d)
+            // Identify the last assistant message just committed.
+            const msgs = d?.messages ?? []
+            const lastAssistant = [...msgs].reverse().find(m => m.role === 'assistant')
+            lastCommittedMessageIdRef.current = lastAssistant?.id ?? null
+          }).catch(() => {})
+        }
+        // Safety net: if stream_complete never arrives (network drop after done),
+        // close after 20s — longer than the backend's 15s visual-generation timeout
+        // so we don't race it under normal conditions.
+        if (streamCompleteTimeoutRef.current) clearTimeout(streamCompleteTimeoutRef.current)
+        streamCompleteTimeoutRef.current = setTimeout(() => {
+          es.close(); esRef.current = null
+          resetStreamState()
+          if (wsId && sid) listChatSessions(wsId).then(setSessions).catch(() => {})
+        }, 20_000)
+
+      } else if (ev.type === 'visuals') {
+        const msgId = lastCommittedMessageIdRef.current
+        if (msgId) {
+          try {
+            const payload = JSON.parse(e.data) as ConsultVisuals
+            setVisualsByMessageId(prev => ({ ...prev, [msgId]: payload }))
+          } catch { /* malformed visuals payload — ignore */ }
+        }
+
+      } else if (ev.type === 'stream_complete') {
+        // Normal close signal from backend — clears the safety-net timer.
+        if (streamCompleteTimeoutRef.current) clearTimeout(streamCompleteTimeoutRef.current)
+        es.close(); esRef.current = null
+        resetStreamState()
+        if (wsId && sid) listChatSessions(wsId).then(setSessions).catch(() => {})
+
+      } else if (ev.type === 'error') {
+        // Error close path — no stream_complete expected.
+        if (streamCompleteTimeoutRef.current) clearTimeout(streamCompleteTimeoutRef.current)
+        es.close(); esRef.current = null
+        if (wsId && sid) {
+          getChatSession(wsId, sid).then(d => {
+            setDetail(d)
+            resetStreamState()
+            listChatSessions(wsId).then(setSessions).catch(() => {})
+          }).catch(() => resetStreamState())
+        } else {
+          resetStreamState()
         }
       }
     }
     es.onerror = () => { es.close(); esRef.current = null; resetStreamState() }
   }, [wsId])
 
-  useEffect(() => { return () => { esRef.current?.close() } }, [])
+  useEffect(() => {
+    return () => {
+      esRef.current?.close()
+      if (streamCompleteTimeoutRef.current) clearTimeout(streamCompleteTimeoutRef.current)
+    }
+  }, [])
 
   async function handleNewChat() {
     if (!wsId) return
@@ -268,8 +328,8 @@ export default function ChatPage() {
                 {/* Persisted messages — meetings grouped as discussion + synthesis */}
                 {groups.map((g, i) =>
                   g.type === 'single'
-                    ? <MessageBubble key={g.message.id} message={g.message} onSubmitDraft={handleSubmitDraft} />
-                    : <MeetingGroup key={i} teamTurns={g.teamTurns} synthesis={g.synthesis} onSubmitDraft={handleSubmitDraft} />
+                    ? <MessageBubble key={g.message.id} message={g.message} onSubmitDraft={handleSubmitDraft} visuals={visualsByMessageId[g.message.id]} />
+                    : <MeetingGroup key={i} teamTurns={g.teamTurns} synthesis={g.synthesis} onSubmitDraft={handleSubmitDraft} visualsByMessageId={visualsByMessageId} />
                 )}
 
                 {/* Live meeting: compact collapsible discussion panel */}
@@ -355,10 +415,11 @@ export default function ChatPage() {
 
 // ── persisted meeting group ───────────────────────────────────────────────────
 
-function MeetingGroup({ teamTurns, synthesis, onSubmitDraft }: {
+function MeetingGroup({ teamTurns, synthesis, onSubmitDraft, visualsByMessageId }: {
   teamTurns: ChatMessage[]
   synthesis: ChatMessage | null
   onSubmitDraft: (id: string) => void
+  visualsByMessageId: Record<string, ConsultVisuals>
 }) {
   const [expanded, setExpanded] = useState(false)
 
@@ -385,7 +446,7 @@ function MeetingGroup({ teamTurns, synthesis, onSubmitDraft }: {
         </div>
       )}
       {/* Synthesis — primary response */}
-      {synthesis && <MessageBubble message={synthesis} onSubmitDraft={onSubmitDraft} />}
+      {synthesis && <MessageBubble message={synthesis} onSubmitDraft={onSubmitDraft} visuals={visualsByMessageId[synthesis.id]} />}
     </div>
   )
 }
@@ -509,7 +570,11 @@ function ToolBadges({ tools, compact }: { tools: ActiveTool[]; compact?: boolean
   )
 }
 
-function MessageBubble({ message, onSubmitDraft }: { message: ChatMessage; onSubmitDraft: (id: string) => void }) {
+function MessageBubble({ message, onSubmitDraft, visuals }: {
+  message: ChatMessage
+  onSubmitDraft: (id: string) => void
+  visuals?: ConsultVisuals
+}) {
   const isUser = message.role === 'user'
   const draftPostId = message.metadata_?.draft_post_id as string | undefined
 
@@ -526,9 +591,12 @@ function MessageBubble({ message, onSubmitDraft }: { message: ChatMessage; onSub
   // synthesis or regular assistant — same prominent treatment
   return (
     <div className="flex justify-end">
-      <div className="max-w-2xl bg-white border border-gray-200 rounded-2xl px-4 py-3 shadow-sm text-gray-800">
+      <div className="max-w-2xl w-full bg-white border border-gray-200 rounded-2xl px-4 py-3 shadow-sm text-gray-800">
         <MarkdownContent content={message.content} />
         {draftPostId && <DraftButton postId={draftPostId} onSubmit={onSubmitDraft} />}
+        {visuals && visuals.visuals.length > 0 && (
+          <VisualRenderer visuals={visuals.visuals} sources={visuals.sources} />
+        )}
       </div>
     </div>
   )

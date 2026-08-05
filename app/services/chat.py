@@ -62,7 +62,7 @@ async def list_sessions(
 async def get_messages(
     db: AsyncSession,
     session_id: str,
-    limit: int = 20,
+    limit: int = 10000,
 ) -> list[ChatMessage]:
     result = await db.execute(
         select(ChatMessage)

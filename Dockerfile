@@ -30,17 +30,18 @@ ENV PATH="/opt/venv/bin:$PATH"
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
+ENV HF_HOME=/app/.huggingface
+
+# Download model before copying app code so this layer stays cached across code changes
+RUN mkdir -p /app/logs /app/uploads /app/.huggingface && \
+    python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-base-en-v1.5')"
 
 COPY --chown=appuser:appuser app/ ./app/
 COPY --chown=appuser:appuser alembic/ ./alembic/
 COPY --chown=appuser:appuser alembic.ini ./
 COPY --chown=appuser:appuser start.sh ./
 
-ENV HF_HOME=/app/.huggingface
-RUN mkdir -p /app/logs /app/uploads /app/.huggingface && \
-    python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-base-en-v1.5')" && \
-    chown -R appuser:appuser /app && \
-    chmod +x /app/start.sh
+RUN chown -R appuser:appuser /app && chmod +x /app/start.sh
 USER appuser
 
 EXPOSE 8000

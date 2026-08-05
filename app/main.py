@@ -28,7 +28,7 @@ for _noisy_logger in ("langchain_core", "langsmith", "langchain_google_genai"):
 from app.config import settings
 from app.database import engine
 from app.routers import health
-from app.routers import workspaces, brand_profiles, plans, posts, connections, admin, knowledge, chat
+from app.routers import workspaces, brand_profiles, plans, posts, connections, admin, knowledge, chat, consulting, consult
 
 
 @asynccontextmanager
@@ -77,6 +77,8 @@ def create_app() -> FastAPI:
     app.include_router(connections.router, prefix="/api")
     app.include_router(knowledge.router, prefix="/api")
     app.include_router(chat.router, prefix="/api")
+    app.include_router(consulting.router, prefix="/api/workspaces")
+    app.include_router(consult.router, prefix="/api/workspaces")
     app.include_router(admin.router, prefix="/api")
     return app
 

@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     embedding_model: str = "BAAI/bge-base-en-v1.5"
     embedding_dimension: int = 768
 
+    # Tavily web search (replaces DuckDuckGo for all web_search and market data lookups)
+    tavily_api_key: SecretStr | None = None
+
     # File uploads (document knowledge base)
     uploads_dir: str = "/app/uploads"
 
