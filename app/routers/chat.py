@@ -144,7 +144,7 @@ async def send_message(
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
-    from app.agents.chat_agent import run_chat_agent
+    from app.agents.meeting_agent import run_meeting_agent
 
     ws = await get_workspace(db, workspace_id)
     if not ws:
@@ -176,14 +176,6 @@ async def send_message(
     await auto_title_session(db, session, user_content)
     await db.commit()
 
-    # Load conversation history (last N messages before this one)
-    history_rows = await get_messages(db, session_id, limit=HISTORY_WINDOW + 1)
-    history = [
-        {"role": m.role, "content": m.content}
-        for m in history_rows
-        if m.id != user_msg.id
-    ][-HISTORY_WINDOW:]
-
     # Pre-retrieve top-3 knowledge chunks as baseline context
     chunks = await search_knowledge(user_content, workspace_id, db, k=3)
     retrieved_context = "\n---\n".join(c.content for c in chunks)
@@ -192,37 +184,23 @@ async def send_message(
 
     import uuid
     placeholder_id = str(uuid.uuid4())
+    meeting_id = str(uuid.uuid4())
 
     if event_bus.exists(session_id):
         event_bus.close(session_id)
     event_bus.create(session_id)
 
-    mode = body.get("mode", "chat")
-    if mode == "meeting":
-        from app.agents.meeting_agent import run_meeting_agent
-        meeting_id = str(uuid.uuid4())
-        background_tasks.add_task(
-            run_meeting_agent,
-            session_id=session_id,
-            meeting_id=meeting_id,
-            workspace_id=workspace_id,
-            user_message=user_content,
-            brand_profile=brand_dict,
-            retrieved_context=retrieved_context,
-        )
-        return SendMessageResponse(message_id=placeholder_id, meeting_id=meeting_id)
-
     background_tasks.add_task(
-        run_chat_agent,
+        run_meeting_agent,
         session_id=session_id,
+        meeting_id=meeting_id,
         workspace_id=workspace_id,
         user_message=user_content,
-        history=history,
         brand_profile=brand_dict,
         retrieved_context=retrieved_context,
     )
 
-    return SendMessageResponse(message_id=placeholder_id)
+    return SendMessageResponse(message_id=placeholder_id, meeting_id=meeting_id)
 
 
 HISTORY_WINDOW = 20

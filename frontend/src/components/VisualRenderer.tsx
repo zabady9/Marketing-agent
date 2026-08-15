@@ -83,8 +83,8 @@ function BlockContent({ block }: { block: VisualBlock }) {
 // ── bar chart ─────────────────────────────────────────────────────────────────
 
 function BarChartBlock({ data }: { data: Record<string, unknown> }) {
-  const items = (data.data as Array<{ label: string; value: number }> | undefined) ?? []
-  const rechartData = items.map(d => ({ name: d.label, value: d.value }))
+  const items = Array.isArray(data.data) ? (data.data as Array<{ label: string; value: number }>).filter(Boolean) : []
+  const rechartData = items.map(d => ({ name: d.label ?? '', value: d.value ?? 0 }))
   return (
     <ResponsiveContainer width="100%" height={200}>
       <BarChart data={rechartData} margin={{ top: 4, right: 8, left: -16, bottom: 4 }}>
@@ -101,8 +101,8 @@ function BarChartBlock({ data }: { data: Record<string, unknown> }) {
 // ── line chart ────────────────────────────────────────────────────────────────
 
 function LineChartBlock({ data }: { data: Record<string, unknown> }) {
-  const items = (data.data as Array<{ label: string; value: number }> | undefined) ?? []
-  const rechartData = items.map(d => ({ name: d.label, value: d.value }))
+  const items = Array.isArray(data.data) ? (data.data as Array<{ label: string; value: number }>).filter(Boolean) : []
+  const rechartData = items.map(d => ({ name: d.label ?? '', value: d.value ?? 0 }))
   return (
     <ResponsiveContainer width="100%" height={200}>
       <LineChart data={rechartData} margin={{ top: 4, right: 8, left: -16, bottom: 4 }}>
@@ -119,8 +119,8 @@ function LineChartBlock({ data }: { data: Record<string, unknown> }) {
 // ── area chart ────────────────────────────────────────────────────────────────
 
 function AreaChartBlock({ data }: { data: Record<string, unknown> }) {
-  const items = (data.data as Array<{ label: string; value: number }> | undefined) ?? []
-  const rechartData = items.map(d => ({ name: d.label, value: d.value }))
+  const items = Array.isArray(data.data) ? (data.data as Array<{ label: string; value: number }>).filter(Boolean) : []
+  const rechartData = items.map(d => ({ name: d.label ?? '', value: d.value ?? 0 }))
   return (
     <ResponsiveContainer width="100%" height={200}>
       <AreaChart data={rechartData} margin={{ top: 4, right: 8, left: -16, bottom: 4 }}>
@@ -143,8 +143,8 @@ function AreaChartBlock({ data }: { data: Record<string, unknown> }) {
 // ── table ─────────────────────────────────────────────────────────────────────
 
 function TableBlock({ data }: { data: Record<string, unknown> }) {
-  const columns = (data.columns as string[] | undefined) ?? []
-  const rows = (data.rows as string[][] | undefined) ?? []
+  const columns = Array.isArray(data.columns) ? (data.columns as string[]) : []
+  const rows = Array.isArray(data.rows) ? (data.rows as string[][]) : []
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-xs border-collapse">
@@ -152,7 +152,7 @@ function TableBlock({ data }: { data: Record<string, unknown> }) {
           <tr>
             {columns.map((col, i) => (
               <th key={i} className="border border-gray-200 bg-gray-50 px-3 py-1.5 text-right font-semibold text-gray-600">
-                {col}
+                {col ?? ''}
               </th>
             ))}
           </tr>
@@ -160,11 +160,11 @@ function TableBlock({ data }: { data: Record<string, unknown> }) {
         <tbody>
           {rows.map((row, ri) => (
             <tr key={ri} className={ri % 2 === 0 ? '' : 'bg-gray-50'}>
-              {row.map((cell, ci) => (
+              {Array.isArray(row) ? row.map((cell, ci) => (
                 <td key={ci} className="border border-gray-200 px-3 py-1.5 text-right text-gray-700">
-                  {cell}
+                  {cell ?? ''}
                 </td>
-              ))}
+              )) : null}
             </tr>
           ))}
         </tbody>
@@ -201,12 +201,12 @@ function MetricCardBlock({ data }: { data: Record<string, unknown> }) {
 interface RadarSeriesItem { name: string; values: number[] }
 
 function RadarChartBlock({ data }: { data: Record<string, unknown> }) {
-  const axes = (data.axes as string[] | undefined) ?? []
-  const series = (data.series as RadarSeriesItem[] | undefined) ?? []
+  const axes = Array.isArray(data.axes) ? (data.axes as string[]) : []
+  const series = Array.isArray(data.series) ? (data.series as RadarSeriesItem[]).filter(Boolean) : []
 
   const rechartData = axes.map((axis, i) => {
     const point: Record<string, unknown> = { subject: axis }
-    series.forEach(s => { point[s.name] = s.values[i] ?? 0 })
+    series.forEach(s => { point[s.name] = Array.isArray(s.values) ? (s.values[i] ?? 0) : 0 })
     return point
   })
 
@@ -236,8 +236,8 @@ function RadarChartBlock({ data }: { data: Record<string, unknown> }) {
 // ── pie / donut chart ─────────────────────────────────────────────────────────
 
 function PieChartBlock({ data, innerRadius }: { data: Record<string, unknown>; innerRadius: number }) {
-  const items = (data.data as Array<{ label: string; value: number }> | undefined) ?? []
-  const rechartData = items.map(d => ({ name: d.label, value: d.value }))
+  const items = Array.isArray(data.data) ? (data.data as Array<{ label: string; value: number }>).filter(Boolean) : []
+  const rechartData = items.map(d => ({ name: d.label ?? '', value: d.value ?? 0 }))
   return (
     <ResponsiveContainer width="100%" height={220}>
       <PieChart>
@@ -266,12 +266,12 @@ function PieChartBlock({ data, innerRadius }: { data: Record<string, unknown>; i
 interface StackedBarSeriesItem { name: string; values: number[] }
 
 function StackedBarChartBlock({ data }: { data: Record<string, unknown> }) {
-  const categories = (data.categories as string[] | undefined) ?? []
-  const series = (data.series as StackedBarSeriesItem[] | undefined) ?? []
+  const categories = Array.isArray(data.categories) ? (data.categories as string[]) : []
+  const series = Array.isArray(data.series) ? (data.series as StackedBarSeriesItem[]).filter(Boolean) : []
 
   const rechartData = categories.map((cat, i) => {
     const point: Record<string, unknown> = { name: cat }
-    series.forEach(s => { point[s.name] = s.values[i] ?? 0 })
+    series.forEach(s => { point[s.name] = Array.isArray(s.values) ? (s.values[i] ?? 0) : 0 })
     return point
   })
 
@@ -338,7 +338,7 @@ interface ComparisonGridItem {
 }
 
 function ComparisonGridBlock({ data }: { data: Record<string, unknown> }) {
-  const items = (data.items as ComparisonGridItem[] | undefined) ?? []
+  const items = (Array.isArray(data.items) ? (data.items as ComparisonGridItem[]) : []).filter(Boolean)
   if (!items.length) return null
   const metricKeys = Object.keys(items[0]?.metrics ?? {})
 
@@ -374,7 +374,7 @@ function ComparisonGridBlock({ data }: { data: Record<string, unknown> }) {
 interface TimelineEvent { date: string; label: string }
 
 function TimelineBlock({ data }: { data: Record<string, unknown> }) {
-  const events = (data.events as TimelineEvent[] | undefined) ?? []
+  const events = (Array.isArray(data.events) ? (data.events as TimelineEvent[]) : []).filter(Boolean)
   return (
     <ol className="relative border-r border-gray-200 mr-2 space-y-3 py-1">
       {events.map((ev, i) => (

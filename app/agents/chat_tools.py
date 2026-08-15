@@ -37,12 +37,29 @@ def make_chat_tools(
 
     @tool
     async def web_search(query: str) -> str:
-        """Search the web for real-time information: competitors, market trends, industry news,
-        pricing benchmarks, social media best practices, or any topic not in the brand knowledge base.
+        """Search the web for real-time information: competitors, market data, industry news,
+        pricing benchmarks, financial reports, social metrics, and any topic requiring current data.
 
-        Use this whenever the user asks about something external — competitors, market data,
-        platform algorithms, trending topics, or anything that requires up-to-date information.
-        Prefer specific queries (e.g. "competitor X Instagram following Egypt 2025") over vague ones.
+        PROXY RESEARCH (CRITICAL): When direct business data — revenue, sales, internal figures —
+        is not publicly available, do NOT say "data unavailable." Proactively search for PUBLIC
+        PROXY INDICATORS that help estimate the competitor's scale and performance:
+          - Public financial reports, investor presentations, annual reports
+          - Website/app traffic rankings (Similarweb, SensorTower)
+          - Social media follower counts and engagement rates
+          - Product pricing and discount patterns (signals positioning and demand)
+          - Job postings volume on LinkedIn/Indeed (signals growth rate)
+          - News coverage, press releases, funding announcements
+          - App store ratings count and review volume
+          - Physical store/location counts (for retail or food businesses)
+          - E-commerce listing counts and bestseller rankings
+
+        Data labeling (STRICT): Always clearly label what each figure represents:
+          ✓ "Reported revenue: $X (Source: [Annual Report 2024](url))"
+          ✓ "Estimated scale: app ranked #23 in food delivery (Source: [SensorTower](url))"
+          ✗ Never present an estimate or proxy as a confirmed figure.
+
+        ALWAYS include the source URL for every cited data point using [Source Name](url) format.
+        Use specific queries (e.g. "Competitor X annual revenue 2024 Saudi Arabia") not vague ones.
         """
         from app.config import settings
 
@@ -71,11 +88,14 @@ def make_chat_tools(
 
     @tool
     async def get_market_data(competitor_name: str, metric_type: MetricType) -> str:
-        """Look up cached or live competitor data. Uses a local cache first (TTL varies
-        by metric) and only calls the web when the cache is missing or stale.
+        """Look up cached or live competitor data for a specific metric type.
 
-        Use this for specific competitor metrics instead of web_search when possible —
-        results include a staleness flag so you can communicate data freshness to the user.
+        Uses a local cache first (TTL varies by metric) and calls the web when stale.
+        Results include source_url, source_title, and fetched_at — ALWAYS cite these
+        in your response using [source_title](source_url) format.
+
+        If the result contains unavailable=True, do NOT stop there. Use web_search
+        immediately to find proxy indicators for the missing metric instead.
 
         competitor_name: exact brand name as known in the market (e.g. "Competitor X").
         metric_type: one of followers, engagement_rate, pricing, campaign, recent_posts.

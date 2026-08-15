@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Component, useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -61,6 +61,36 @@ function groupMessages(messages: ChatMessage[]): MessageGroup[] {
   return groups
 }
 
+// ── error boundary (prevents a chart crash from unmounting the whole page) ────
+class MessagesErrorBoundary extends Component<
+  { children: React.ReactNode },
+  { crashed: boolean; errorMsg: string }
+> {
+  state = { crashed: false, errorMsg: '' }
+  static getDerivedStateFromError(error: Error) {
+    return { crashed: true, errorMsg: error?.message ?? '' }
+  }
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    console.error('[MessagesErrorBoundary] render crash:', error, info.componentStack)
+  }
+  render() {
+    if (this.state.crashed) {
+      return (
+        <div className="flex-1 flex flex-col items-center justify-center gap-3 text-sm text-gray-400">
+          <p>حدث خطأ أثناء عرض المحادثة.</p>
+          <button
+            onClick={() => this.setState({ crashed: false, errorMsg: '' })}
+            className="text-xs text-indigo-500 underline"
+          >
+            إعادة المحاولة
+          </button>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
+
 // ── main component ────────────────────────────────────────────────────────────
 export default function ChatPage() {
   const { wsId, sessionId } = useParams<{ wsId: string; sessionId?: string }>()
@@ -75,12 +105,12 @@ export default function ChatPage() {
   const [sending, setSending] = useState(false)
   const [error, setError] = useState('')
 
-  const [meetingMode, setMeetingMode] = useState(false)
   const [currentAgent, setCurrentAgent] = useState<CurrentAgent | null>(null)
   const [meetingPhase, setMeetingPhase] = useState<MeetingPhase>('idle')
   const [liveAgentMessages, setLiveAgentMessages] = useState<LiveAgentMessage[]>([])
 
   const [visualsByMessageId, setVisualsByMessageId] = useState<Record<string, ConsultVisuals>>({})
+  const [generatingVisualsForMessageId, setGeneratingVisualsForMessageId] = useState<string | null>(null)
 
   const esRef = useRef<EventSource | null>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
@@ -90,7 +120,13 @@ export default function ChatPage() {
   // handler can attach to the correct message even if the user sends a new
   // message between `done` and `visuals` arriving.
   const lastCommittedMessageIdRef = useRef<string | null>(null)
-  // Safety-net timer: if stream_complete never arrives after done, close after 20s.
+  // Buffers a visuals payload that arrived before lastCommittedMessageIdRef was set.
+  // Flushed in the done handler once the message ID is resolved.
+  const pendingVisualsRef = useRef<ConsultVisuals | null>(null)
+  // True when visuals_generating arrived before getChatSession resolved.
+  // Flushed in the done handler alongside lastCommittedMessageIdRef.
+  const pendingVisualsGeneratingRef = useRef(false)
+  // Safety-net timer: if stream_complete never arrives after done, close after 35s.
   const streamCompleteTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
@@ -102,6 +138,24 @@ export default function ChatPage() {
     if (!wsId || !sessionId) { setDetail(null); return }
     getChatSession(wsId, sessionId).then(setDetail).catch(() => {})
   }, [wsId, sessionId])
+
+  useEffect(() => {
+    if (!detail) return
+    const fromMeta: Record<string, ConsultVisuals> = {}
+    for (const msg of detail.messages) {
+      const v = msg.metadata_?.visuals
+      if (Array.isArray(v) && v.length > 0) {
+        fromMeta[msg.id] = {
+          visuals: v as ConsultVisuals['visuals'],
+          sources: (msg.metadata_?.sources as ConsultVisuals['sources']) ?? [],
+        }
+      }
+    }
+    if (Object.keys(fromMeta).length > 0) {
+      // Metadata is the baseline; live SSE visuals (already in state) take precedence.
+      setVisualsByMessageId(prev => ({ ...fromMeta, ...prev }))
+    }
+  }, [detail])
 
   useEffect(() => {
     const el = scrollContainerRef.current
@@ -119,6 +173,8 @@ export default function ChatPage() {
     setStreamingContent(''); setActiveTools([]); setIsStreaming(true)
     setCurrentAgent(null); setMeetingPhase('idle'); setLiveAgentMessages([])
     currentStreamRef.current = ''; currentAgentRef.current = null
+    pendingVisualsRef.current = null
+    setGeneratingVisualsForMessageId(null)
 
     const es = new EventSource(`${BASE}/api/workspaces/${wsId}/chat/sessions/${sid}/stream`)
     esRef.current = es
@@ -176,29 +232,51 @@ export default function ChatPage() {
             const msgs = d?.messages ?? []
             const lastAssistant = [...msgs].reverse().find(m => m.role === 'assistant')
             lastCommittedMessageIdRef.current = lastAssistant?.id ?? null
+            // Flush buffered visuals_generating that arrived before this ref was set.
+            if (pendingVisualsGeneratingRef.current && lastAssistant?.id) {
+              setGeneratingVisualsForMessageId(lastAssistant.id)
+              pendingVisualsGeneratingRef.current = false
+            }
+            // Flush visuals that arrived before the ref was set (race condition buffer).
+            if (pendingVisualsRef.current && lastAssistant?.id) {
+              setVisualsByMessageId(prev => ({
+                ...prev,
+                [lastAssistant.id]: pendingVisualsRef.current!,
+              }))
+              pendingVisualsRef.current = null
+            }
           }).catch(() => {})
         }
         // Safety net: if stream_complete never arrives (network drop after done),
-        // close after 20s — longer than the backend's 15s visual-generation timeout
+        // close after 35s — longer than the backend's 30s visual-generation timeout
         // so we don't race it under normal conditions.
         if (streamCompleteTimeoutRef.current) clearTimeout(streamCompleteTimeoutRef.current)
         streamCompleteTimeoutRef.current = setTimeout(() => {
           es.close(); esRef.current = null
           resetStreamState()
           if (wsId && sid) listChatSessions(wsId).then(setSessions).catch(() => {})
-        }, 20_000)
+        }, 35_000)
+
+      } else if (ev.type === 'visuals_generating') {
+        const msgId = lastCommittedMessageIdRef.current
+        if (msgId) setGeneratingVisualsForMessageId(msgId)
+        else pendingVisualsGeneratingRef.current = true
 
       } else if (ev.type === 'visuals') {
-        const msgId = lastCommittedMessageIdRef.current
-        if (msgId) {
-          try {
-            const payload = JSON.parse(e.data) as ConsultVisuals
+        setGeneratingVisualsForMessageId(null)
+        try {
+          const payload = JSON.parse(e.data) as ConsultVisuals
+          const msgId = lastCommittedMessageIdRef.current
+          if (msgId) {
             setVisualsByMessageId(prev => ({ ...prev, [msgId]: payload }))
-          } catch { /* malformed visuals payload — ignore */ }
-        }
+          } else {
+            pendingVisualsRef.current = payload  // buffer until done handler sets the ref
+          }
+        } catch { /* malformed visuals payload — ignore */ }
 
       } else if (ev.type === 'stream_complete') {
         // Normal close signal from backend — clears the safety-net timer.
+        setGeneratingVisualsForMessageId(null)
         if (streamCompleteTimeoutRef.current) clearTimeout(streamCompleteTimeoutRef.current)
         es.close(); esRef.current = null
         resetStreamState()
@@ -264,7 +342,7 @@ export default function ChatPage() {
     }
     setDetail(prev => prev ? { ...prev, messages: [...prev.messages, tempMsg] } : prev)
     try {
-      await sendChatMessage(wsId, sessionId, content, meetingMode ? 'meeting' : 'chat')
+      await sendChatMessage(wsId, sessionId, content)
       openStream(sessionId)
     } catch (err) { setError(err instanceof Error ? err.message : 'فشل إرسال الرسالة') }
     finally { setSending(false) }
@@ -324,12 +402,13 @@ export default function ChatPage() {
             </div>
           ) : (
             <>
+              <MessagesErrorBoundary key={sessionId}>
               <div ref={scrollContainerRef} className="flex-1 min-h-0 overflow-y-auto px-6 py-6 space-y-4">
                 {/* Persisted messages — meetings grouped as discussion + synthesis */}
                 {groups.map((g, i) =>
                   g.type === 'single'
-                    ? <MessageBubble key={g.message.id} message={g.message} onSubmitDraft={handleSubmitDraft} visuals={visualsByMessageId[g.message.id]} />
-                    : <MeetingGroup key={i} teamTurns={g.teamTurns} synthesis={g.synthesis} onSubmitDraft={handleSubmitDraft} visualsByMessageId={visualsByMessageId} />
+                    ? <MessageBubble key={g.message.id} message={g.message} onSubmitDraft={handleSubmitDraft} visuals={visualsByMessageId[g.message.id]} isGeneratingVisuals={generatingVisualsForMessageId === g.message.id} />
+                    : <MeetingGroup key={i} teamTurns={g.teamTurns} synthesis={g.synthesis} onSubmitDraft={handleSubmitDraft} visualsByMessageId={visualsByMessageId} generatingVisualsForMessageId={generatingVisualsForMessageId} />
                 )}
 
                 {/* Live meeting: compact collapsible discussion panel */}
@@ -366,30 +445,9 @@ export default function ChatPage() {
                 {error && <p className="text-xs text-red-500 text-center">{error}</p>}
                 <div />
               </div>
+              </MessagesErrorBoundary>
 
               <form onSubmit={handleSend} className="px-6 py-4 border-t border-gray-200 bg-white">
-                <div className="flex items-center gap-2 mb-3">
-                  <button
-                    type="button"
-                    onClick={() => setMeetingMode(prev => !prev)}
-                    disabled={isStreaming}
-                    className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors focus:outline-none disabled:opacity-50 ${meetingMode ? 'bg-indigo-600' : 'bg-gray-300'}`}
-                  >
-                    <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${meetingMode ? 'translate-x-4' : 'translate-x-0.5'}`} />
-                  </button>
-                  <span className={`text-xs ${meetingMode ? 'text-indigo-600 font-medium' : 'text-gray-400'}`}>
-                    {meetingMode ? 'وضع الاجتماع' : 'مساعد واحد'}
-                  </span>
-                  {meetingMode && (
-                    <div className="flex gap-1 mr-1">
-                      {Object.entries(AGENT_PERSONAS).filter(([id]) => id !== 'chief_of_staff').map(([id, p]) => (
-                        <div key={id} title={`${p.name} · ${p.role}`} className={`w-5 h-5 ${p.avatarBg} rounded-full flex items-center justify-center text-white text-xs font-bold`}>
-                          {p.name[0]}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
                 <div className="flex gap-3 items-end">
                   <button type="submit" disabled={sending || isStreaming || !input.trim()} className="bg-indigo-600 text-white text-sm font-medium px-5 py-2.5 rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
                     إرسال
@@ -415,11 +473,12 @@ export default function ChatPage() {
 
 // ── persisted meeting group ───────────────────────────────────────────────────
 
-function MeetingGroup({ teamTurns, synthesis, onSubmitDraft, visualsByMessageId }: {
+function MeetingGroup({ teamTurns, synthesis, onSubmitDraft, visualsByMessageId, generatingVisualsForMessageId }: {
   teamTurns: ChatMessage[]
   synthesis: ChatMessage | null
   onSubmitDraft: (id: string) => void
   visualsByMessageId: Record<string, ConsultVisuals>
+  generatingVisualsForMessageId: string | null
 }) {
   const [expanded, setExpanded] = useState(false)
 
@@ -446,7 +505,14 @@ function MeetingGroup({ teamTurns, synthesis, onSubmitDraft, visualsByMessageId 
         </div>
       )}
       {/* Synthesis — primary response */}
-      {synthesis && <MessageBubble message={synthesis} onSubmitDraft={onSubmitDraft} visuals={visualsByMessageId[synthesis.id]} />}
+      {synthesis && (
+        <MessageBubble
+          message={synthesis}
+          onSubmitDraft={onSubmitDraft}
+          visuals={visualsByMessageId[synthesis.id]}
+          isGeneratingVisuals={generatingVisualsForMessageId === synthesis.id}
+        />
+      )}
     </div>
   )
 }
@@ -570,10 +636,11 @@ function ToolBadges({ tools, compact }: { tools: ActiveTool[]; compact?: boolean
   )
 }
 
-function MessageBubble({ message, onSubmitDraft, visuals }: {
+function MessageBubble({ message, onSubmitDraft, visuals, isGeneratingVisuals }: {
   message: ChatMessage
   onSubmitDraft: (id: string) => void
   visuals?: ConsultVisuals
+  isGeneratingVisuals?: boolean
 }) {
   const isUser = message.role === 'user'
   const draftPostId = message.metadata_?.draft_post_id as string | undefined
@@ -597,6 +664,14 @@ function MessageBubble({ message, onSubmitDraft, visuals }: {
         {visuals && visuals.visuals.length > 0 && (
           <VisualRenderer visuals={visuals.visuals} sources={visuals.sources} />
         )}
+        {isGeneratingVisuals && !visuals && (
+          <div className="mt-3 flex items-center gap-2 text-sm text-gray-400 animate-pulse">
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+            </svg>
+            <span>جارٍ توليد الرسوم البيانية…</span>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -611,6 +686,7 @@ function DraftButton({ postId, onSubmit }: { postId: string; onSubmit: (id: stri
 }
 
 function MarkdownContent({ content }: { content: string }) {
+  if (!content) return null
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}

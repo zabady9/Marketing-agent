@@ -28,11 +28,12 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.agents.chat_tools import make_chat_tools
 from app.agents.llm import get_llm
-from app.agents.meeting_roster import CHIEF_OF_STAFF, ROSTER, AgentPersona
+from app.agents.meeting_roster import CHIEF_OF_STAFF, ROSTER, ROSTER_MAP, AgentPersona
 from app.database import AsyncSessionLocal
 from app.models.chat import MessageRole
 from app.services import event_bus
-from app.services.chat import save_message
+from app.services.chat import attach_visuals_to_message, save_message
+from app.services.visual_generator import generate_visuals
 
 logger = logging.getLogger(__name__)
 
@@ -331,6 +332,367 @@ Never switch languages regardless of the language used in the brand profile or t
     return full_content
 
 
+# ── bypass / focused helpers ──────────────────────────────────────────────────
+
+_BYPASS_SYSTEM_INSTRUCTIONS: dict[str, str] = {
+    "casual": (
+        "The user sent a casual greeting or small talk. "
+        "Respond warmly and naturally in 1-2 short sentences. "
+        "No analysis, no tools, no lengthy explanations. Just be friendly and welcoming."
+    ),
+    "system_question": (
+        "The user wants to know what this marketing team can help with. "
+        "Give a brief, clear overview: the team specialises in market intelligence — "
+        "market research, competitive analysis, feasibility studies, brand positioning, "
+        "gap analysis, and strategic recommendations. Content creation and planning are "
+        "also available when explicitly requested. Be concise, friendly, and helpful."
+    ),
+    "followup_clarification": (
+        "The user is asking for clarification or expansion on the previous response. "
+        "Use the conversation context to give a focused, helpful clarification. "
+        "Be direct and concise — no need to repeat background that was already covered."
+    ),
+    "out_of_scope": (
+        "The user's request is outside the scope of this marketing team's expertise. "
+        "Politely decline in 1-2 sentences and briefly note what the team CAN help with: "
+        "market intelligence, competitive analysis, business strategy, brand advisory, "
+        "and content creation when needed."
+    ),
+}
+
+
+async def _run_casey_bypass(
+    session_id: str,
+    meeting_id: str,
+    workspace_id: str,
+    user_message: str,
+    intent: str,
+    brand_profile: dict,
+    retrieved_context: str,
+    session_factory: async_sessionmaker,
+) -> None:
+    """Casey responds directly without bidding or tools.
+
+    Used for casual, system_question, followup_clarification, and out_of_scope intents.
+    Emits stream_complete in its own finally but does NOT close the event bus
+    — the outer run_meeting_agent finally block handles that.
+    """
+    system_instruction = _BYPASS_SYSTEM_INSTRUCTIONS.get(intent, _BYPASS_SYSTEM_INSTRUCTIONS["casual"])
+
+    system = f"""\
+You are Casey, the Chief of Staff of this marketing team.
+
+## Brand
+{json.dumps(brand_profile, indent=2)}
+
+## Task
+{system_instruction}
+
+## Language (CRITICAL)
+Detect the language of the user's message and respond ONLY in that language.
+- User writes in Arabic → respond entirely in Arabic.
+- User writes in English → respond entirely in English.
+Never switch languages regardless of the language used in the brand profile or these instructions.
+"""
+
+    llm = get_llm("cheap")  # no bind_tools — intentionally no tools in bypass path
+    messages = [
+        SystemMessage(content=system),
+        HumanMessage(content=user_message),
+    ]
+
+    full_content = ""
+    try:
+        async for ev in llm.astream_events(messages, version="v2"):
+            if ev["event"] == "on_chat_model_stream":
+                chunk = ev["data"]["chunk"]
+                raw = chunk.content
+                if isinstance(raw, list):
+                    text = "".join(
+                        p.get("text", "") for p in raw
+                        if isinstance(p, dict) and p.get("type") == "text"
+                    )
+                else:
+                    text = raw or ""
+                if text:
+                    await event_bus.emit(session_id, {"type": "token", "content": text})
+                    full_content += text
+
+        bypass_msg_id: str | None = None
+        async with session_factory() as db:
+            bypass_msg = await save_message(
+                db,
+                session_id=session_id,
+                workspace_id=workspace_id,
+                role=MessageRole.assistant,
+                content=full_content,
+                agent_id=CHIEF_OF_STAFF.id,
+                meeting_id=meeting_id,
+                turn_index=0,
+                metadata={"intent": intent, "bypass": True},
+            )
+            bypass_msg_id = bypass_msg.id
+            await db.commit()
+
+        await event_bus.emit(session_id, {"type": "done"})
+
+        # Auto-visualize follow-up intents when the session has prior data-rich analysis.
+        # The visual generator returns [] for non-data follow-ups ("وضح أكثر"), so this
+        # only produces output when the previous response actually contained numbers/stats.
+        if intent == "followup_clarification":
+            from app.services.chat import get_messages as _get_bypass_msgs
+            try:
+                async with session_factory() as db:
+                    _prior = await _get_bypass_msgs(db, session_id)
+                _analysis_msgs = [
+                    m for m in _prior
+                    if m.role == MessageRole.assistant.value and len(m.content) > 300
+                ]
+                if _analysis_msgs:
+                    _prev_content = _analysis_msgs[-1].content
+                    await event_bus.emit(session_id, {"type": "visuals_generating"})
+                    _visual_resp = await asyncio.wait_for(
+                        generate_visuals(user_message, _prev_content, [], brand_profile),
+                        timeout=30.0,
+                    )
+                    if _visual_resp.visuals:
+                        _visuals_data = [v.model_dump() for v in _visual_resp.visuals]
+                        _sources_data = [s.model_dump() for s in _visual_resp.sources]
+                        await event_bus.emit(session_id, {
+                            "type": "visuals",
+                            "visuals": _visuals_data,
+                            "sources": _sources_data,
+                        })
+                        if bypass_msg_id:
+                            async with session_factory() as db:
+                                await attach_visuals_to_message(db, bypass_msg_id, _visuals_data, _sources_data)
+                                await db.commit()
+            except Exception as exc:
+                logger.warning(
+                    "Auto-visual in bypass failed for session %s: %s", session_id, exc
+                )
+
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.exception("Casey bypass failed for session %s (intent=%s)", session_id, intent)
+        await event_bus.emit(session_id, {"type": "error", "message": str(exc)})
+    finally:
+        await event_bus.emit(session_id, {"type": "stream_complete"})
+
+
+async def _run_focused_agent(
+    session_id: str,
+    meeting_id: str,
+    workspace_id: str,
+    user_message: str,
+    intent: str,
+    persona: AgentPersona,
+    allowed_tool_names: list[str],
+    brand_profile: dict,
+    retrieved_context: str,
+    all_tools: list,
+    tool_map: dict[str, Any],
+    session_factory: async_sessionmaker,
+) -> None:
+    """One designated agent responds with a subset of tools. No bidding, no synthesis.
+
+    Used for trend_lookup, data_insights, and plan_generation intents.
+    Emits stream_complete in its own finally but does NOT close the event bus
+    — the outer run_meeting_agent finally block handles that.
+    """
+    try:
+        await event_bus.emit(
+            session_id,
+            {
+                "type": "agent_turn_start",
+                "agent": persona.id,
+                "name": persona.name,
+                "bid_reason": f"Designated specialist for {intent.replace('_', ' ')}",
+            },
+        )
+
+        focused_tools = [t for t in all_tools if t.name in allowed_tool_names]
+        focused_tool_map = {k: v for k, v in tool_map.items() if k in allowed_tool_names}
+        llm_with_tools = get_llm("cheap").bind_tools(focused_tools) if focused_tools else get_llm("cheap")
+
+        system = f"""\
+You are {persona.name}, a specialist responding directly to the user's request.
+
+## Brand Profile
+{json.dumps(brand_profile, indent=2)}
+
+## Relevant Brand Knowledge
+{retrieved_context or "No knowledge documents indexed yet."}
+
+## Your role
+{persona.system_prompt}
+
+## Language (CRITICAL)
+Detect the language of the user's message and respond ONLY in that language.
+- User writes in Arabic → respond entirely in Arabic.
+- User writes in English → respond entirely in English.
+Never switch languages regardless of the language used in the brand profile or these instructions.
+"""
+
+        messages = [
+            SystemMessage(content=system),
+            HumanMessage(content=user_message),
+        ]
+
+        full_content = ""
+        tool_rounds = 0
+
+        while tool_rounds <= MAX_TOOL_ROUNDS:
+            response = None
+
+            async for ev in llm_with_tools.astream_events(messages, version="v2"):
+                etype = ev["event"]
+                if etype == "on_chat_model_stream":
+                    chunk = ev["data"]["chunk"]
+                    raw = chunk.content
+                    if isinstance(raw, list):
+                        text = "".join(
+                            p.get("text", "") for p in raw
+                            if isinstance(p, dict) and p.get("type") == "text"
+                        )
+                    else:
+                        text = raw or ""
+                    if text:
+                        await event_bus.emit(session_id, {"type": "token", "content": text})
+                        full_content += text
+                elif etype == "on_chat_model_end":
+                    response = ev["data"]["output"]
+
+            if not response or not getattr(response, "tool_calls", None):
+                break
+
+            tool_rounds += 1
+            if tool_rounds > MAX_TOOL_ROUNDS:
+                break
+
+            messages.append(response)
+            for tc in response.tool_calls:
+                await event_bus.emit(
+                    session_id,
+                    {"type": "tool_start", "tool": tc["name"], "agent": persona.id},
+                )
+                tool_fn = focused_tool_map.get(tc["name"])
+                if tool_fn is None:
+                    result = f"Unknown tool: {tc['name']}"
+                else:
+                    try:
+                        result = await tool_fn.ainvoke(tc["args"])
+                    except Exception as exc:
+                        logger.warning(
+                            "Tool %s failed for focused agent %s: %s", tc["name"], persona.id, exc
+                        )
+                        result = f"Error: {exc}"
+                await event_bus.emit(
+                    session_id,
+                    {"type": "tool_end", "tool": tc["name"], "agent": persona.id},
+                )
+                messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
+
+        await event_bus.emit(session_id, {"type": "agent_turn_end", "agent": persona.id})
+
+        focused_msg_id: str | None = None
+        async with session_factory() as db:
+            focused_msg = await save_message(
+                db,
+                session_id=session_id,
+                workspace_id=workspace_id,
+                role=MessageRole.assistant,
+                content=full_content,
+                agent_id=persona.id,
+                meeting_id=meeting_id,
+                turn_index=0,
+                metadata={"intent": intent, "focused": True},
+            )
+            focused_msg_id = focused_msg.id
+            await db.commit()
+
+        await event_bus.emit(session_id, {"type": "done"})
+
+        if intent in _VISUAL_INTENTS:
+            try:
+                await event_bus.emit(session_id, {"type": "visuals_generating"})
+                tool_sources = _extract_tool_sources(messages)
+                visual_response = await asyncio.wait_for(
+                    generate_visuals(user_message, full_content, tool_sources, brand_profile),
+                    timeout=30.0,
+                )
+                if visual_response.visuals:
+                    visuals_data = [v.model_dump() for v in visual_response.visuals]
+                    sources_data = [s.model_dump() for s in visual_response.sources]
+                    await event_bus.emit(session_id, {
+                        "type": "visuals",
+                        "visuals": visuals_data,
+                        "sources": sources_data,
+                    })
+                    if focused_msg_id:
+                        async with session_factory() as db:
+                            await attach_visuals_to_message(db, focused_msg_id, visuals_data, sources_data)
+                            await db.commit()
+            except Exception as exc:
+                logger.warning(
+                    "Visual generation failed for focused session %s (intent=%s): %s",
+                    session_id, intent, exc,
+                )
+
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.exception(
+            "Focused agent failed for session %s (persona=%s, intent=%s)",
+            session_id, persona.id, intent,
+        )
+        await event_bus.emit(session_id, {"type": "error", "message": str(exc)})
+    finally:
+        await event_bus.emit(session_id, {"type": "stream_complete"})
+
+
+# ── visual generation helpers ─────────────────────────────────────────────────
+
+_VISUAL_INTENTS = frozenset({
+    "market_research", "competitive_analysis", "feasibility_study",
+    "brand_analysis", "gap_analysis", "strategic_recommendation",
+    "data_insights", "trend_lookup",
+})
+
+
+def _extract_tool_sources(messages: list) -> list[dict]:
+    """Parse ToolMessage results and extract source references from get_market_data calls."""
+    sources = []
+    for msg in messages:
+        if hasattr(msg, "content") and isinstance(msg.content, str):
+            try:
+                data = json.loads(msg.content)
+                if isinstance(data, dict) and data.get("source_url"):
+                    sources.append({
+                        "title": data.get("source_title", "Market data"),
+                        "url": data["source_url"],
+                        "fetched_at": data.get("fetched_at", ""),
+                    })
+            except (json.JSONDecodeError, TypeError):
+                pass
+    return sources
+
+
+# ── routing constants ─────────────────────────────────────────────────────────
+
+_BYPASS_INTENTS = frozenset({
+    "casual", "system_question", "followup_clarification", "out_of_scope",
+})
+
+# Maps intent → (persona_id, allowed_tool_names)
+_FOCUSED_ROUTING: dict[str, tuple[str, list[str]]] = {
+    "trend_lookup":  ("seo_analyst", ["web_search"]),
+    "data_insights": ("seo_analyst", ["get_market_data", "web_search"]),
+    "plan_generation": ("strategist", ["trigger_plan_generation", "search_brand_knowledge"]),
+}
+
+
 # ── main orchestrator ─────────────────────────────────────────────────────────
 async def run_meeting_agent(
     session_id: str,
@@ -343,7 +705,53 @@ async def run_meeting_agent(
 ) -> None:
     """Background task. Orchestrates the full multi-agent meeting room."""
     try:
+        # ── Step 1: classify intent and route ────────────────────────────────
+        from app.agents.intent_agent import classify_chat_intent
+
+        try:
+            intent_result = await classify_chat_intent(user_message, brand_profile)
+            intent = intent_result.intent
+            logger.debug("Chat intent for session %s: %s (reason: %s)", session_id, intent, intent_result.reasoning)
+        except Exception as exc:
+            logger.warning("Intent classification failed, defaulting to market_research: %s", exc)
+            intent = "market_research"
+
+        if intent in _BYPASS_INTENTS:
+            await _run_casey_bypass(
+                session_id=session_id,
+                meeting_id=meeting_id,
+                workspace_id=workspace_id,
+                user_message=user_message,
+                intent=intent,
+                brand_profile=brand_profile,
+                retrieved_context=retrieved_context,
+                session_factory=session_factory,
+            )
+            return
+
+        # Tools are needed for focused and full-meeting paths
         all_tools, tool_map = make_chat_tools(workspace_id, brand_profile, session_factory)
+
+        if intent in _FOCUSED_ROUTING:
+            persona_id, allowed_tool_names = _FOCUSED_ROUTING[intent]
+            persona = ROSTER_MAP[persona_id]
+            await _run_focused_agent(
+                session_id=session_id,
+                meeting_id=meeting_id,
+                workspace_id=workspace_id,
+                user_message=user_message,
+                intent=intent,
+                persona=persona,
+                allowed_tool_names=allowed_tool_names,
+                brand_profile=brand_profile,
+                retrieved_context=retrieved_context,
+                all_tools=all_tools,
+                tool_map=tool_map,
+                session_factory=session_factory,
+            )
+            return
+
+        # ── Step 2: Full meeting flow (analysis + content intents) ───────────
 
         # Transcript: list of {role, content, agent_id?, agent_name?}
         transcript: list[dict] = [{"role": "user", "content": user_message}]
@@ -473,8 +881,9 @@ async def run_meeting_agent(
             tool_map=tool_map,
         )
 
+        synthesis_msg_id: str | None = None
         async with session_factory() as db:
-            await save_message(
+            synthesis_msg = await save_message(
                 db,
                 session_id=session_id,
                 workspace_id=workspace_id,
@@ -485,10 +894,36 @@ async def run_meeting_agent(
                 turn_index=total_turns,
                 metadata={"synthesis": True},
             )
+            synthesis_msg_id = synthesis_msg.id
             await db.commit()
 
         await event_bus.emit(session_id, {"type": "synthesis_end"})
         await event_bus.emit(session_id, {"type": "done"})
+
+        if intent in _VISUAL_INTENTS:
+            try:
+                await event_bus.emit(session_id, {"type": "visuals_generating"})
+                visual_response = await asyncio.wait_for(
+                    generate_visuals(user_message, synthesis_content, [], brand_profile),
+                    timeout=30.0,
+                )
+                if visual_response.visuals:
+                    visuals_data = [v.model_dump() for v in visual_response.visuals]
+                    sources_data = [s.model_dump() for s in visual_response.sources]
+                    await event_bus.emit(session_id, {
+                        "type": "visuals",
+                        "visuals": visuals_data,
+                        "sources": sources_data,
+                    })
+                    if synthesis_msg_id:
+                        async with session_factory() as db:
+                            await attach_visuals_to_message(db, synthesis_msg_id, visuals_data, sources_data)
+                            await db.commit()
+            except Exception as exc:
+                logger.warning(
+                    "Visual generation failed for meeting %s (intent=%s): %s",
+                    meeting_id, intent, exc,
+                )
 
     except asyncio.CancelledError:
         logger.debug("Meeting agent cancelled (client disconnected) for session %s", session_id)
@@ -497,4 +932,5 @@ async def run_meeting_agent(
         logger.exception("Meeting agent failed for session %s", session_id)
         await event_bus.emit(session_id, {"type": "error", "message": str(exc)})
     finally:
+        await event_bus.emit(session_id, {"type": "stream_complete"})
         event_bus.close(session_id)

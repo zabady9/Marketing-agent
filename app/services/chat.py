@@ -110,6 +110,23 @@ async def auto_title_session(
         await db.flush()
 
 
+async def attach_visuals_to_message(
+    db: AsyncSession,
+    message_id: str,
+    visuals: list[dict],
+    sources: list[dict],
+) -> None:
+    """Persist generated visuals into a message's metadata_ so they survive page refresh."""
+    result = await db.execute(select(ChatMessage).where(ChatMessage.id == message_id))
+    msg = result.scalar_one_or_none()
+    if msg:
+        meta = dict(msg.metadata_ or {})
+        meta["visuals"] = visuals
+        meta["sources"] = sources
+        msg.metadata_ = meta
+        await db.flush()
+
+
 async def get_or_create_chat_draft_plan(
     db: AsyncSession,
     workspace_id: str,

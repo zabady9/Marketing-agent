@@ -1,3 +1,7 @@
+# DEPRECATED: Single-assistant mode has been removed. All chat traffic now routes to
+# run_meeting_agent() in meeting_agent.py via intent-aware routing. This file is
+# kept temporarily to avoid breaking any external references.
+
 """Chat agent — manual agentic loop using langchain-core primitives.
 
 Uses astream_events (v2) to stream tokens and detect tool calls.
