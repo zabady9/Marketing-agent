@@ -26,11 +26,14 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from sqlalchemy import update as sa_update
+
 from app.agents.chat_tools import make_chat_tools
 from app.agents.llm import get_llm
 from app.agents.meeting_roster import CHIEF_OF_STAFF, ROSTER, ROSTER_MAP, AgentPersona
 from app.database import AsyncSessionLocal
 from app.models.chat import MessageRole
+from app.models.consulting_analysis import ConsultingAnalysis
 from app.services import event_bus
 from app.services.chat import attach_visuals_to_message, save_message
 from app.services.visual_generator import generate_visuals
@@ -77,16 +80,16 @@ async def _safe_bid(
         transcript_text = _format_transcript(transcript, window=BID_CONTEXT_WINDOW)
 
         system = f"""\
-You are {persona.name}, a {persona.id} marketing specialist.
+You are {persona.name}, a specialist analyst.
 
-## Brand
+## Subject Profile
 {json.dumps(brand_profile, indent=2)}
 
 ## Your role
 {persona.system_prompt}
 
 ## Bidding instructions
-Decide whether you have something GENUINELY NEW to add to this marketing discussion.
+Decide whether you have something GENUINELY NEW to add to this discussion.
 
 Bid HIGH (7-10) only if you have a SPECIFIC, SUBSTANTIVE contribution:
 - A clear disagreement with something already said
@@ -100,7 +103,7 @@ Bid LOW (0-3) if:
 - You have nothing meaningfully new to add
 
 Example of a correct low-score non-bid:
-{{"score": 1, "reason": "The strategist already covered the campaign angle I had in mind."}}
+{{"score": 1, "reason": "The Insights Director already covered the strategic angle I had in mind."}}
 
 Respond ONLY with JSON matching the schema: {{"score": 0-10, "reason": "<one line>"}}
 """
@@ -142,27 +145,27 @@ async def _run_agent_turn(
     llm_with_tools = get_llm("cheap").bind_tools(agent_tools)
 
     system = f"""\
-You are {persona.name}, a {persona.id} marketing specialist participating in a team meeting.
+You are {persona.name}, a specialist analyst participating in a team discussion.
 
-## Brand Profile
+## Subject Profile
 {json.dumps(brand_profile, indent=2)}
 
-## Relevant Brand Knowledge
+## Relevant Subject Knowledge
 {retrieved_context or "No knowledge documents indexed yet."}
 
-## Your role in this meeting
+## Your role in this discussion
 {persona.system_prompt}
 
 ## Guidelines
 - Be concise and direct — this is a fast-paced team discussion, not a monologue.
 - Build on or challenge what others said; don't repeat what's already been covered.
-- Use your tools when they would genuinely add value (research, drafting, searching).
+- Use your tools when they would genuinely add value (research, data retrieval, knowledge search).
 
 ## Language (CRITICAL)
 Detect the language of the user's message and respond ONLY in that language.
 - User writes in Arabic → respond entirely in Arabic.
 - User writes in English → respond entirely in English.
-Never switch languages regardless of the language used in the brand profile or these instructions.
+Never switch languages regardless of the language used in the subject profile or these instructions.
 """
 
     transcript_text = _format_transcript(transcript)
@@ -250,12 +253,12 @@ async def _run_synthesis(
     llm_with_tools = get_llm("cheap").bind_tools(agent_tools)
 
     system = f"""\
-You are {persona.name}, the Chief of Staff.
+You are {persona.name}, the Lead Analyst.
 
-## Brand Profile
+## Subject Profile
 {json.dumps(brand_profile, indent=2)}
 
-## Relevant Brand Knowledge
+## Relevant Subject Knowledge
 {retrieved_context or "No knowledge documents indexed yet."}
 
 ## Your task
@@ -265,7 +268,7 @@ You are {persona.name}, the Chief of Staff.
 Detect the language of the user's message and respond ONLY in that language.
 - User writes in Arabic → respond entirely in Arabic.
 - User writes in English → respond entirely in English.
-Never switch languages regardless of the language used in the brand profile or these instructions.
+Never switch languages regardless of the language used in the subject profile or these instructions.
 """
     transcript_text = _format_transcript(transcript)
 
@@ -341,11 +344,11 @@ _BYPASS_SYSTEM_INSTRUCTIONS: dict[str, str] = {
         "No analysis, no tools, no lengthy explanations. Just be friendly and welcoming."
     ),
     "system_question": (
-        "The user wants to know what this marketing team can help with. "
-        "Give a brief, clear overview: the team specialises in market intelligence — "
-        "market research, competitive analysis, feasibility studies, brand positioning, "
-        "gap analysis, and strategic recommendations. Content creation and planning are "
-        "also available when explicitly requested. Be concise, friendly, and helpful."
+        "The user wants to know what this analyst team can help with. "
+        "Give a brief, clear overview: the team specialises in market intelligence and strategic analysis — "
+        "market research, competitive analysis, SWOT and PESTEL reports, feasibility studies, "
+        "quantitative benchmarking, gap identification, and strategic recommendations. "
+        "Be concise, friendly, and helpful."
     ),
     "followup_clarification": (
         "The user is asking for clarification or expansion on the previous response. "
@@ -353,10 +356,10 @@ _BYPASS_SYSTEM_INSTRUCTIONS: dict[str, str] = {
         "Be direct and concise — no need to repeat background that was already covered."
     ),
     "out_of_scope": (
-        "The user's request is outside the scope of this marketing team's expertise. "
+        "The user's request is outside the scope of this analyst team's expertise. "
         "Politely decline in 1-2 sentences and briefly note what the team CAN help with: "
-        "market intelligence, competitive analysis, business strategy, brand advisory, "
-        "and content creation when needed."
+        "market research, competitive analysis, SWOT/PESTEL reports, feasibility studies, "
+        "quantitative benchmarking, gap analysis, and strategic recommendations."
     ),
 }
 
@@ -371,18 +374,19 @@ async def _run_casey_bypass(
     retrieved_context: str,
     session_factory: async_sessionmaker,
 ) -> None:
-    """Casey responds directly without bidding or tools.
+    """Lead Analyst responds directly without bidding or tools.
 
-    Used for casual, system_question, followup_clarification, and out_of_scope intents.
+    Used for casual, system_question, followup_clarification, out_of_scope, setup_subject,
+    and report_retrieval intents.
     Emits stream_complete in its own finally but does NOT close the event bus
     — the outer run_meeting_agent finally block handles that.
     """
     system_instruction = _BYPASS_SYSTEM_INSTRUCTIONS.get(intent, _BYPASS_SYSTEM_INSTRUCTIONS["casual"])
 
     system = f"""\
-You are Casey, the Chief of Staff of this marketing team.
+You are {CHIEF_OF_STAFF.name}, the Lead Analyst.
 
-## Brand
+## Subject Profile
 {json.dumps(brand_profile, indent=2)}
 
 ## Task
@@ -392,7 +396,7 @@ You are Casey, the Chief of Staff of this marketing team.
 Detect the language of the user's message and respond ONLY in that language.
 - User writes in Arabic → respond entirely in Arabic.
 - User writes in English → respond entirely in English.
-Never switch languages regardless of the language used in the brand profile or these instructions.
+Never switch languages regardless of the language used in the subject profile or these instructions.
 """
 
     llm = get_llm("cheap")  # no bind_tools — intentionally no tools in bypass path
@@ -494,6 +498,7 @@ async def _run_focused_agent(
     all_tools: list,
     tool_map: dict[str, Any],
     session_factory: async_sessionmaker,
+    created_analysis_ids: list[str],
 ) -> None:
     """One designated agent responds with a subset of tools. No bidding, no synthesis.
 
@@ -517,12 +522,12 @@ async def _run_focused_agent(
         llm_with_tools = get_llm("cheap").bind_tools(focused_tools) if focused_tools else get_llm("cheap")
 
         system = f"""\
-You are {persona.name}, a specialist responding directly to the user's request.
+You are {persona.name}, a specialist analyst responding directly to the user's request.
 
-## Brand Profile
+## Subject Profile
 {json.dumps(brand_profile, indent=2)}
 
-## Relevant Brand Knowledge
+## Relevant Subject Knowledge
 {retrieved_context or "No knowledge documents indexed yet."}
 
 ## Your role
@@ -532,7 +537,7 @@ You are {persona.name}, a specialist responding directly to the user's request.
 Detect the language of the user's message and respond ONLY in that language.
 - User writes in Arabic → respond entirely in Arabic.
 - User writes in English → respond entirely in English.
-Never switch languages regardless of the language used in the brand profile or these instructions.
+Never switch languages regardless of the language used in the subject profile or these instructions.
 """
 
         messages = [
@@ -611,6 +616,14 @@ Never switch languages regardless of the language used in the brand profile or t
             )
             focused_msg_id = focused_msg.id
             await db.commit()
+            if created_analysis_ids and focused_msg_id:
+                await db.execute(
+                    sa_update(ConsultingAnalysis)
+                    .where(ConsultingAnalysis.id.in_(list(created_analysis_ids)))
+                    .values(chat_message_id=focused_msg_id)
+                )
+                await db.commit()
+                created_analysis_ids.clear()
 
         await event_bus.emit(session_id, {"type": "done"})
 
@@ -655,9 +668,10 @@ Never switch languages regardless of the language used in the brand profile or t
 # ── visual generation helpers ─────────────────────────────────────────────────
 
 _VISUAL_INTENTS = frozenset({
-    "market_research", "competitive_analysis", "feasibility_study",
-    "brand_analysis", "gap_analysis", "strategic_recommendation",
-    "data_insights", "trend_lookup",
+    "market_research", "competitive_analysis", "gap_analysis",
+    "strategic_recommendation", "subject_analysis",
+    "data_insights", "quantitative_analysis", "trend_lookup",
+    "swot", "pestel", "feasibility",
 })
 
 
@@ -687,10 +701,19 @@ _BYPASS_INTENTS = frozenset({
 
 # Maps intent → (persona_id, allowed_tool_names)
 _FOCUSED_ROUTING: dict[str, tuple[str, list[str]]] = {
-    "trend_lookup":  ("seo_analyst", ["web_search"]),
-    "data_insights": ("seo_analyst", ["get_market_data", "web_search"]),
-    "plan_generation": ("strategist", ["trigger_plan_generation", "search_brand_knowledge"]),
+    "trend_lookup":          ("data_scout",    ["web_search"]),
+    "data_insights":         ("data_scout",    ["get_market_data", "web_search"]),
+    "quantitative_analysis": ("quant_analyst", ["search_subject_knowledge"]),
+    "setup_subject":         ("lead_analyst",  []),
+    "report_retrieval":      ("lead_analyst",  []),
+    "swot":                  ("lead_analyst",  ["run_formal_analysis", "web_search"]),
+    "pestel":                ("lead_analyst",  ["run_formal_analysis", "web_search"]),
+    "feasibility":           ("lead_analyst",  ["run_formal_analysis", "web_search"]),
+    "general_analysis":      ("lead_analyst",  ["run_formal_analysis", "web_search"]),
 }
+
+# Full lookup including CHIEF_OF_STAFF for focused routing to lead_analyst
+_ALL_PERSONA_MAP: dict[str, "AgentPersona"] = {**ROSTER_MAP, CHIEF_OF_STAFF.id: CHIEF_OF_STAFF}
 
 
 # ── main orchestrator ─────────────────────────────────────────────────────────
@@ -706,10 +729,10 @@ async def run_meeting_agent(
     """Background task. Orchestrates the full multi-agent meeting room."""
     try:
         # ── Step 1: classify intent and route ────────────────────────────────
-        from app.agents.intent_agent import classify_chat_intent
+        from app.agents.intent_agent import classify_analyst_intent
 
         try:
-            intent_result = await classify_chat_intent(user_message, brand_profile)
+            intent_result = await classify_analyst_intent(user_message, brand_profile)
             intent = intent_result.intent
             logger.debug("Chat intent for session %s: %s (reason: %s)", session_id, intent, intent_result.reasoning)
         except Exception as exc:
@@ -730,11 +753,11 @@ async def run_meeting_agent(
             return
 
         # Tools are needed for focused and full-meeting paths
-        all_tools, tool_map = make_chat_tools(workspace_id, brand_profile, session_factory)
+        all_tools, tool_map, created_analysis_ids = make_chat_tools(workspace_id, brand_profile, session_factory)
 
         if intent in _FOCUSED_ROUTING:
             persona_id, allowed_tool_names = _FOCUSED_ROUTING[intent]
-            persona = ROSTER_MAP[persona_id]
+            persona = _ALL_PERSONA_MAP[persona_id]
             await _run_focused_agent(
                 session_id=session_id,
                 meeting_id=meeting_id,
@@ -748,10 +771,11 @@ async def run_meeting_agent(
                 all_tools=all_tools,
                 tool_map=tool_map,
                 session_factory=session_factory,
+                created_analysis_ids=created_analysis_ids,
             )
             return
 
-        # ── Step 2: Full meeting flow (analysis + content intents) ───────────
+        # ── Step 2: Full meeting flow (analysis intents) ─────────────────────
 
         # Transcript: list of {role, content, agent_id?, agent_name?}
         transcript: list[dict] = [{"role": "user", "content": user_message}]
@@ -896,6 +920,14 @@ async def run_meeting_agent(
             )
             synthesis_msg_id = synthesis_msg.id
             await db.commit()
+            if created_analysis_ids and synthesis_msg_id:
+                await db.execute(
+                    sa_update(ConsultingAnalysis)
+                    .where(ConsultingAnalysis.id.in_(list(created_analysis_ids)))
+                    .values(chat_message_id=synthesis_msg_id)
+                )
+                await db.commit()
+                created_analysis_ids.clear()
 
         await event_bus.emit(session_id, {"type": "synthesis_end"})
         await event_bus.emit(session_id, {"type": "done"})

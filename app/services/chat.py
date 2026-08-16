@@ -5,8 +5,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.chat import ChatMessage, ChatSession, MessageRole
-from app.models.content_plan import ContentPlan
-from app.models.enums import PlanStatus
 
 logger = logging.getLogger(__name__)
 
@@ -127,26 +125,3 @@ async def attach_visuals_to_message(
         await db.flush()
 
 
-async def get_or_create_chat_draft_plan(
-    db: AsyncSession,
-    workspace_id: str,
-) -> ContentPlan:
-    # TODO: race condition — two concurrent calls can create two draft plans.
-    # Both are functional; accepted as low-probability technical debt.
-    # Fix with UniqueConstraint("workspace_id", "goal") migration if it becomes a problem.
-    result = await db.execute(
-        select(ContentPlan).where(
-            ContentPlan.workspace_id == workspace_id,
-            ContentPlan.goal == "__chat_drafts__",
-        ).limit(1)
-    )
-    plan = result.scalar_one_or_none()
-    if plan is None:
-        plan = ContentPlan(
-            workspace_id=workspace_id,
-            goal="__chat_drafts__",
-            status=PlanStatus.ready.value,
-        )
-        db.add(plan)
-        await db.flush()
-    return plan

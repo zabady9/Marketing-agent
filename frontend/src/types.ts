@@ -5,37 +5,38 @@ export interface Workspace {
   created_at: string
 }
 
-export interface ProductItem {
+// ── Analysis Subject (replaces BrandProfile) ──────────────────────────────────
+
+export interface BusinessLine {
   name: string
   description: string
-  price_point?: string
+  notes?: string | null
 }
 
-export interface AudienceSegment {
+export interface TrackedCompetitor {
   name: string
-  description: string
-  pain_points: string[]
-  channels: string[]
+  description?: string | null
+  notes?: string | null
 }
 
-export interface BrandProfile {
+export interface AnalysisSubject {
   id: string
   workspace_id: string
-  company_name: string | null
-  brand_name: string | null
+  subject_name: string | null
+  legal_name: string | null
+  subject_type: string | null
   industry: string | null
-  products: ProductItem[]
-  audience_segments: AudienceSegment[]
-  tone: string | null
-  voice_guidelines: string | null
-  positioning: string | null
-  goals: string[]
-  avoid: string[]
+  subject_description: string | null
+  business_lines: BusinessLine[]
+  tracked_competitors: TrackedCompetitor[]
+  areas_of_interest: string[]
+  setup_status: string
   extra: Record<string, unknown>
-  onboarding_status: 'in_progress' | 'pending_review' | 'active'
   created_at: string
   updated_at: string
 }
+
+// ── Knowledge ─────────────────────────────────────────────────────────────────
 
 export interface KnowledgeDocument {
   id: string
@@ -56,47 +57,21 @@ export interface KnowledgeChunk {
   created_at: string
 }
 
-export type PostStatus =
-  | 'draft'
-  | 'pending_approval'
-  | 'approved'
-  | 'scheduled'
-  | 'published'
-  | 'rejected'
+// ── Reports (consulting_analyses) ─────────────────────────────────────────────
 
-export interface Post {
-  id: string
-  day: number
-  theme: string
-  format: string
-  angle: string
-  content: string
-  hashtags: string[]
-  suggested_time: string
-  status: PostStatus
-  created_at: string
-}
+export type ReportStatus = 'generating' | 'ready' | 'failed'
 
-export type PlanStatus = 'generating' | 'ready' | 'failed'
-
-export interface Plan {
+export interface Report {
   id: string
   workspace_id: string
-  goal: string | null
-  status: PlanStatus
+  analysis_type: string
+  status: ReportStatus
+  results: Record<string, unknown> | null
   error: string | null
-  posts: Post[]
   created_at: string
 }
 
-export interface Connection {
-  id: string
-  name: string
-  identifier: string
-  picture: string
-  disabled: boolean
-  profile: string
-}
+// ── Chat ──────────────────────────────────────────────────────────────────────
 
 export interface ChatMessage {
   id: string
@@ -122,7 +97,7 @@ export interface ChatSessionDetail extends ChatSession {
   messages: ChatMessage[]
 }
 
-// ── visual blocks (emitted via `visuals` SSE event after `done`) ──────────────
+// ── Visual blocks (emitted via SSE after `done`) ──────────────────────────────
 
 export type VisualType =
   | 'bar_chart'

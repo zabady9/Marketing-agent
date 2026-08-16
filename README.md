@@ -1,26 +1,28 @@
-# Marketing Agent
+# Analyst Agent
 
-AI marketing assistant that plans, writes, and schedules social media content.  
-Built on FastAPI + PostgreSQL + Postiz (self-hosted). Humans approve everything before it goes live.
+AI-powered market intelligence assistant. Ask questions in natural language; a team of specialist agents researches the market, surfaces verifiable data, and synthesizes structured findings — SWOT, PESTEL, feasibility studies, competitive maps.
+
+Built on FastAPI + PostgreSQL + LangGraph (Gemini). No content publishing. No social media scheduling. Pure analysis.
 
 ## Architecture
 
 ```
-FastAPI Agent Layer  →  Postiz REST API  →  Social Platforms
-                     ↑
-         Human approval gate (always required for publishing)
+User question
+    ↓
+Intent classifier (18 classes)
+    ↓
+Meeting room: Data Scout · Quant Analyst · Insights Director · Domain Specialist
+    ↓
+Lead Analyst synthesis (+ optional formal report via consulting engine)
+    ↓
+Visual output (charts, tables, metric cards) + cited sources
 ```
-
-- **Strategy Agent** (claude-sonnet-4-6): brand brief → 7-day content plan
-- **Content Agent** (claude-sonnet-4-6): plan → posts
-- **Critic Agent** (claude-haiku-4-5-20251001): review tone, brand fit, errors
-- **Analytics Agent** (claude-haiku-4-5-20251001): metrics → next week's adjustments
 
 ## Quick Start (local)
 
 ```bash
 cp .env.example .env
-# Fill in: ANTHROPIC_API_KEY, POSTIZ_JWT_SECRET
+# Fill in: GOOGLE_API_KEY, TAVILY_API_KEY, ADMIN_API_KEY
 make dev-build
 
 # Health check
@@ -31,173 +33,34 @@ curl http://localhost:8001/api/health
 
 | Service | Port | Purpose |
 |---|---|---|
-| FastAPI app | 8001 | Our API (host 8001 → container 8000) |
-| Postiz frontend | 5174 | Postiz UI (host 5174 → container 5000) |
-| Postiz API | 5174/api | Postiz REST API — nginx routes `/api/` → NestJS (`/api/public/v1/...`) |
-| Our Postgres | 5432 | App database |
+| FastAPI app | 8001 | API (host 8001 → container 8000) |
+| PostgreSQL | 5432 | App database (pgvector) |
+| Frontend | 3000 | React SPA |
 
-Port 8001 is used on the host because port 8000 was in use on this machine.
-Port 5174 is used on the host because port 5000 is occupied by macOS AirPlay Receiver.
-The app container always talks to Postiz via the internal Docker network (`http://postiz:5000`), so `POSTIZ_API_URL` in docker-compose.yml stays unchanged.
+## Key capabilities
 
-## Postiz API key setup
+- **Competitive analysis** — market position, competitor benchmarking, gap identification
+- **Market research** — size, segments, growth rates, industry trends
+- **Formal reports** — SWOT, PESTEL, feasibility studies (structured, cited)
+- **Subject knowledge base** — upload PDFs/docs; agents search them during analysis
+- **Visual output** — auto-generated charts, tables, and metric cards from real data
 
-After `make dev-build`:
-
-1. Open [http://localhost:5174](http://localhost:5174) — create an account
-2. Settings → Developer → API Keys → Create Key
-3. Copy the key → set `POSTIZ_API_KEY=<key>` in `.env`
-4. `docker compose restart app`
-
-## Running tests
+## Development
 
 ```bash
-# In Docker (matches CI)
-make test
+# Local dev (Postgres at localhost:5432/analyst)
+DATABASE_URL=postgresql+asyncpg://postgres:changeme@localhost:5432/analyst \
+  uvicorn app.main:app --reload --port 8000
 
-# Locally (faster)
-make test-local
-```
+# Run tests
+DATABASE_URL=postgresql+asyncpg://postgres:changeme@localhost:5432/analyst \
+  python -m pytest tests/ -v
 
-## Database migrations
-
-```bash
-make migrate                   # apply all pending
-make migrate-create            # generate new migration
-make migrate-down              # revert last migration
-```
-
-## GCP / production deployment
-
-```bash
-cp .env.example .env
-# Fill in DOMAIN, CERTBOT_EMAIL, all secrets
-
+# Docker
 make dev-build
-
-# Point DNS A record to your VM IP, then:
-make ssl-init DOMAIN=yourdomain.com CERTBOT_EMAIL=you@example.com
 ```
 
-`make ssl-init` renders the nginx template (substituting only `${DOMAIN}` via
-`envsubst '${DOMAIN}'` so nginx variables like `$http_upgrade` are preserved),
-obtains a Let's Encrypt certificate, and starts the nginx+certbot stack.
-Renewal runs automatically via the certbot loop.
+## Tech stack
 
-## Postiz rate limits
-
-The self-hosted Postiz public API rate limit is configurable (see Postiz env).
-The `PostizClient` retries automatically on 429 with exponential backoff.
-Each distinct post requires a separate `POST /public/v1/posts` request — plan
-scheduling to stay within your configured limit.
-
-## TODO — Phase 4 analytics
-
-The Postiz public API has no analytics endpoint. Phase 4 analytics options:
-- Read post `state` / `releaseURL` from `GET /public/v1/posts`
-- Pull metrics from platform-native APIs (X, LinkedIn, etc.)
-- Add a third-party analytics layer
-
-Decision deferred to Phase 4.
-
-## Build phases
-
-| Phase | Status | What |
-|---|---|---|
-| 1 — Foundation | **Done** | FastAPI + Docker + Postiz + PostizClient |
-| 2 — First agent | **Done** | Gemini + LangGraph + brand endpoints + draft generation |
-| 3 — Approval gate | **Done** | Status machine + approve/reject/edit/regenerate/schedule |
-| 4 — The loop | Pending | Analytics → feed next plan |
-
-## LangGraph generation flow (Phase 2)
-
-```
-POST /plans:generate
-        │
-        ▼
-  strategy_node  ──────────────────────────────────────────────┐
-  (gemini-2.5-pro)                                             │
-  → 7 ContentIdeas                                             │
-        │                                                      │
-        ▼  (repeat for each idea)                              │
-  content_node                                                 │
-  (gemini-2.5-pro)                                             │
-  → ContentOutput {content, hashtags, suggested_time}         │
-        │                                                      │
-        ▼                                                      │
-  critic_node                                                  │
-  (gemini-2.5-flash)                                           │
-  → CriticOutput {approved, issues, fixed_body?}               │
-        │                                                      │
-        ├─ not approved + revision_count == 0 ──► apply        │
-        │   fixed_body, set revision_count=1 → content_node   │
-        │                                                      │
-        └─ approved (or revision exhausted) ──► append post   │
-                                                               │
-  advance_node: current_idx++ → next idea or END ─────────────┘
-```
-
-All agents use `with_structured_output(Schema, method="json_schema")` — no
-free-form JSON parsing. Nodes are DB-pure: they accumulate `action_logs` in
-state; `run_generation` writes all logs + Post rows in one transaction.
-
-**Model tiers:**
-- `gemini-2.5-pro` (`REASONING_MODEL`) — strategy + content (reasoning-heavy)
-- `gemini-2.5-flash` (`CHEAP_MODEL`) — critic (fast + cheap review)
-
-**MemorySaver checkpointer** — in-memory only. Phase 3 will swap to a Postgres
-checkpointer so paused human-in-the-loop runs survive restarts.
-
-## Enabling LangSmith tracing
-
-```bash
-# In .env:
-LANGSMITH_TRACING=true
-LANGSMITH_API_KEY=your-key-here
-LANGSMITH_PROJECT=marketing-agent
-```
-
-When enabled, every `graph.ainvoke` call produces a trace at smith.langchain.com.
-Leave `LANGSMITH_TRACING=false` (default) for local dev and all tests.
-
-## API reference
-
-```
-POST /api/workspaces                              — create workspace
-GET  /api/workspaces/{id}                         — fetch workspace
-PUT  /api/workspaces/{id}/brand                   — upsert brand profile
-GET  /api/workspaces/{id}/brand                   — fetch brand profile
-POST /api/workspaces/{id}/plans:generate          — start generation (202, background)
-GET  /api/workspaces/{id}/plans/{plan_id}         — poll status + posts
-GET  /api/workspaces/{id}/connections             — list Postiz integrations
-
-POST /api/posts/{id}:approve                      — pending_approval → approved
-POST /api/posts/{id}:reject                       — → rejected (optional {"reason": "..."})
-PATCH /api/posts/{id}                             — edit content/hashtags/suggested_time
-                                                    (approved → pending_approval on edit)
-POST /api/posts/{id}:regenerate                   — rewrite via AI (202, optional {"note": "..."})
-POST /api/posts/{id}:schedule                     — approved → scheduled via Postiz
-                                                    body: {integration_id, provider, when}
-```
-
-## Post status machine
-
-```
-draft ──────────────────────────────► pending_approval
-                                            │
-                              ┌─────────────┴──────────────┐
-                              ▼                            ▼
-                           approved                     rejected
-                              │
-                 ┌────────────┼────────────┐
-                 ▼            ▼            ▼
-          pending_approval  scheduled   rejected
-                              │
-                              ▼
-                           published
-```
-
-- Editing an **approved** post resets it to **pending_approval**.
-- Regenerating an **approved** post resets it to **pending_approval**.
-- `POST /posts/{id}:schedule` is only allowed from **approved**.
-- Publishing (`scheduled → published`) is driven by Postiz; not a direct API call.
+**Backend:** FastAPI · SQLAlchemy 2.0 async · PostgreSQL 16 + pgvector · LangGraph · LangChain · Gemini (2.5 Pro / Flash) · sentence-transformers (BAAI/bge-base-en-v1.5) · Tavily  
+**Frontend:** React 18 · TypeScript · Vite · Tailwind CSS · Recharts

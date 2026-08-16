@@ -1068,10 +1068,10 @@ ADMIN_API_KEY=<hex-32>           # openssl rand -hex 32
 ALLOWED_ORIGINS=["http://localhost:3000"]
 
 # Database
-DATABASE_URL=postgresql+asyncpg://postgres:changeme@db:5432/marketing
+DATABASE_URL=postgresql+asyncpg://postgres:changeme@db:5432/analyst
 POSTGRES_USER=postgres
 POSTGRES_PASSWORD=changeme
-POSTGRES_DB=marketing
+POSTGRES_DB=analyst
 
 # Google Gemini
 GOOGLE_API_KEY=<your-key>
@@ -1082,7 +1082,7 @@ MAX_TOKENS=8192
 # LangSmith (optional tracing)
 LANGSMITH_TRACING=false
 LANGSMITH_API_KEY=<key>
-LANGSMITH_PROJECT=marketing-agent
+LANGSMITH_PROJECT=analyst-agent
 
 # Postiz
 POSTIZ_API_URL=http://postiz:5000        # Docker internal
@@ -1203,7 +1203,7 @@ async def test_client():
 
 ```bash
 make test           # In Docker (matches CI)
-make test-local     # Locally (needs Postgres at localhost:5432/marketing)
+make test-local     # Locally (needs Postgres at localhost:5432/analyst)
 pytest tests/test_plans.py -v    # Single file
 pytest tests/ -v -s              # All with output
 ```
@@ -1229,7 +1229,7 @@ Services started: `app`, `db`, `postiz`, `postiz-db`, `postiz-redis`, `frontend`
 
 ```bash
 # First-time SSL setup
-make ssl-init DOMAIN=marketing.yourdomain.com CERTBOT_EMAIL=admin@yourdomain.com
+make ssl-init DOMAIN=analyst.yourdomain.com CERTBOT_EMAIL=admin@yourdomain.com
 
 # Start with SSL layer
 docker compose -f docker-compose.yml -f docker-compose.nginx.yml up -d

@@ -1,39 +1,34 @@
-"""Chat agent tools: brand knowledge search, web search (Tavily), draft post creation,
-plan generation, and competitor market data lookup."""
-import asyncio
+"""Chat agent tools: subject knowledge search, web search (Tavily), market data lookup, and formal analysis."""
 import json
 import logging
-import uuid
 from typing import Literal
 
 from langchain_core.tools import tool
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.database import AsyncSessionLocal
-from app.models.enums import PlanStatus, PostStatus
-from app.models.content_plan import ContentPlan
-from app.models.post import Post
-from app.services.chat import get_or_create_chat_draft_plan
-from app.services.event_bus import create as bus_create
 from app.services.knowledge_search import search_knowledge
 
 logger = logging.getLogger(__name__)
 
-# Strong reference to prevent asyncio GC of fire-and-forget tasks.
-_background_tasks: set[asyncio.Task] = set()
-
-MetricType = Literal["followers", "engagement_rate", "pricing", "campaign", "recent_posts"]
+MetricType = Literal[
+    "revenue", "funding", "headcount", "market_share",
+    "growth_rate", "pricing", "product_launches", "news_sentiment",
+]
 
 
 def make_chat_tools(
     workspace_id: str,
     brand_profile: dict,
     session_factory: async_sessionmaker = AsyncSessionLocal,
-) -> tuple[list, dict]:
-    """Return (tools_list, tool_map) for the agentic loop.
+) -> tuple[list, dict, list[str]]:
+    """Return (tools_list, tool_map, created_analysis_ids) for the agentic loop.
 
-    tool_map is {tool_name: tool_callable} used to dispatch tool calls.
+    created_analysis_ids accumulates IDs of ConsultingAnalysis rows created by
+    run_formal_analysis during a turn, so the caller can backfill chat_message_id
+    after the assistant ChatMessage commits.
     """
+    created_analysis_ids: list[str] = []
 
     @tool
     async def web_search(query: str) -> str:
@@ -98,7 +93,8 @@ def make_chat_tools(
         immediately to find proxy indicators for the missing metric instead.
 
         competitor_name: exact brand name as known in the market (e.g. "Competitor X").
-        metric_type: one of followers, engagement_rate, pricing, campaign, recent_posts.
+        metric_type: one of revenue, funding, headcount, market_share, growth_rate,
+                     pricing, product_launches, news_sentiment.
         """
         from app.config import settings
         from app.services.market_awareness import get_market_data as _get
@@ -124,11 +120,11 @@ def make_chat_tools(
         return json.dumps(result, default=str)
 
     @tool
-    async def search_brand_knowledge(query: str) -> str:
-        """Search brand knowledge documents for specific brand information.
+    async def search_subject_knowledge(query: str) -> str:
+        """Search subject knowledge documents for specific information about the entity under analysis.
 
         Use this when you need more detail than what's already in context, e.g.,
-        specific product specs, pricing language, or exact messaging guidelines.
+        specific business line details, competitor notes, or areas of interest context.
         """
         async with session_factory() as db:
             chunks = await search_knowledge(query, workspace_id, db, k=3)
@@ -137,72 +133,97 @@ def make_chat_tools(
         return "\n---\n".join(c.content for c in chunks)
 
     @tool
-    async def create_draft_post(
-        content: str,
-        hashtags: list[str],
-        suggested_time: str,
-        theme: str,
-    ) -> dict:
-        """Draft a social media post and save it to the workspace draft queue.
+    async def run_formal_analysis(analysis_type: str, context: str = "") -> str:
+        """Invoke the structured analysis engine to produce a formal report.
 
-        The user can then review and submit it for approval from the UI.
-        Returns the post_id and a content preview.
+        Produces an evidence-backed structured report grounded in web research.
+        Call this when the user's request requires a formal structured analysis report.
+
+        analysis_type: The framework to use. Must be one of:
+          - "swot": SWOT analysis (strengths, weaknesses, opportunities, threats)
+          - "pestel": PESTEL macro-environment analysis
+          - "feasibility": Go/no-go feasibility study for a specific decision
+          - "market_research": External market landscape, size, and key segments
+          - "subject_analysis": Deep analysis of the subject's positioning and competitive structure
+        context: Specific question or focus area to ground the analysis (optional but recommended).
+
+        Returns a JSON-formatted structured report. Format its sections into your synthesis —
+        do not return the raw JSON to the user.
         """
+        from sqlalchemy import select
+
+        from app.agents.consulting_agent import gather_research, run_analysis as _run_analysis
+        from app.models.consulting_analysis import ConsultingAnalysis
+
+        _TYPE_MAP = {
+            "swot": "swot",
+            "pestel": "pestel",
+            "feasibility": "feasibility",
+            "market_research": "market_research",
+            "subject_analysis": "brand_analysis",
+        }
+
+        consulting_type = _TYPE_MAP.get(analysis_type)
+        if not consulting_type:
+            valid = ", ".join(sorted(_TYPE_MAP.keys()))
+            return f"Invalid analysis_type '{analysis_type}'. Must be one of: {valid}"
+
+        # Persist a record so the report is retrievable via GET /reports/{id}.
+        # analysis_id is tracked in created_analysis_ids so the caller can
+        # backfill chat_message_id once the assistant ChatMessage commits.
         async with session_factory() as db:
-            plan = await get_or_create_chat_draft_plan(db, workspace_id)
-            post = Post(
-                id=str(uuid.uuid4()),
-                plan_id=plan.id,
+            record = ConsultingAnalysis(
                 workspace_id=workspace_id,
-                day=0,
-                theme=theme,
-                format="post",
-                angle="Chat draft",
-                content=content,
-                hashtags=hashtags,
-                suggested_time=suggested_time,
-                status=PostStatus.draft.value,
+                analysis_type=consulting_type,
+                status="generating",
             )
-            db.add(post)
+            db.add(record)
             await db.commit()
-            await db.refresh(post)
-        preview = content[:100] + ("…" if len(content) > 100 else "")
-        return {"post_id": post.id, "preview": preview}
+            await db.refresh(record)
+            analysis_id = record.id
+        created_analysis_ids.append(analysis_id)
 
-    @tool
-    async def trigger_plan_generation(goal: str) -> str:
-        """Start a full 7-day content plan generation in the background.
+        try:
+            citations = await gather_research(brand_profile, consulting_type, context or None)
+            output = await _run_analysis(brand_profile, consulting_type, citations, context or None)
+            output_dict = output.model_dump()
+            citations_dicts = [c.model_dump() for c in citations]
 
-        Returns the plan_id so the user can track it in the Plans section.
-        """
-        from app.services.generation import run_generation
+            async with session_factory() as db:
+                result = await db.execute(
+                    select(ConsultingAnalysis).where(ConsultingAnalysis.id == analysis_id)
+                )
+                saved = result.scalar_one()
+                saved.status = "ready"
+                saved.results = {
+                    "analysis_type": consulting_type,
+                    "output": output_dict,
+                    "citations": citations_dicts,
+                }
+                await db.commit()
 
-        plan_id = str(uuid.uuid4())
-        async with session_factory() as db:
-            plan = ContentPlan(
-                id=plan_id,
-                workspace_id=workspace_id,
-                goal=goal,
-                status=PlanStatus.generating.value,
-            )
-            db.add(plan)
-            await db.commit()
-
-        bus_create(plan_id)
-        task = asyncio.create_task(
-            run_generation(plan_id, workspace_id, brand_profile, goal, session_factory)
-        )
-        _background_tasks.add(task)
-        task.add_done_callback(_background_tasks.discard)
-
-        return f"Plan generation started. Plan ID: {plan_id}"
+            return json.dumps(output_dict, indent=2, ensure_ascii=False)
+        except Exception as exc:
+            logger.warning("run_formal_analysis failed for type %s: %s", analysis_type, exc)
+            try:
+                async with session_factory() as db:
+                    result = await db.execute(
+                        select(ConsultingAnalysis).where(ConsultingAnalysis.id == analysis_id)
+                    )
+                    saved = result.scalar_one_or_none()
+                    if saved:
+                        saved.status = "failed"
+                        saved.error = str(exc)
+                        await db.commit()
+            except Exception:
+                pass
+            return f"Analysis engine temporarily unavailable: {exc}"
 
     tools = [
         web_search,
         get_market_data,
-        search_brand_knowledge,
-        create_draft_post,
-        trigger_plan_generation,
+        search_subject_knowledge,
+        run_formal_analysis,
     ]
     tool_map = {t.name: t for t in tools}
-    return tools, tool_map
+    return tools, tool_map, created_analysis_ids

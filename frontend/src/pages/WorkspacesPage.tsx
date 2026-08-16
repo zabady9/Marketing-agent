@@ -36,18 +36,9 @@ export default function WorkspacesPage() {
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
       <header className="bg-slate-900 text-white px-8 py-4 flex items-center gap-3">
-        <div className="w-8 h-8 bg-indigo-500 rounded-lg flex items-center justify-center font-bold text-sm">م</div>
-        <span className="text-lg font-semibold">وكيل التسويق</span>
+        <div className="w-8 h-8 bg-indigo-500 rounded-lg flex items-center justify-center font-bold text-sm">ت</div>
+        <span className="text-lg font-semibold">وكيل التحليل</span>
         <div className="mr-auto flex items-center gap-2">
-          <a
-            href={import.meta.env.VITE_POSTIZ_URL || 'http://localhost:5174'}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-xs text-slate-300 hover:text-white transition-colors bg-slate-700 hover:bg-slate-600 px-3 py-1.5 rounded-lg flex items-center gap-1.5"
-          >
-            <span>📤</span>
-            <span>Postiz</span>
-          </a>
           <a href="/admin" className="text-xs text-slate-400 hover:text-white transition-colors border border-slate-700 hover:border-slate-500 px-3 py-1.5 rounded-lg">← الإدارة</a>
         </div>
       </header>
@@ -56,7 +47,7 @@ export default function WorkspacesPage() {
         <div className="flex items-center justify-between mb-8">
           <div>
             <h1 className="text-2xl font-bold text-gray-900">مساحات العمل</h1>
-            <p className="text-gray-500 mt-1">كل مساحة عمل لها ملف علامة تجارية وخطط محتوى خاصة بها.</p>
+            <p className="text-gray-500 mt-1">كل مساحة عمل لها موضوع تحليل وسجل استعلامات خاص بها.</p>
           </div>
           <button
             onClick={() => setShowForm(true)}

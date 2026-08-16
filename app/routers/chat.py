@@ -14,7 +14,7 @@ from app.schemas.chat import (
     SendMessageResponse,
 )
 from app.services import event_bus
-from app.services.brand_profile import brand_profile_to_dict, get_brand_profile
+from app.services.analysis_subject import analysis_subject_to_dict, get_analysis_subject
 from app.services.chat import (
     auto_title_session,
     get_messages,
@@ -150,11 +150,11 @@ async def send_message(
     if not ws:
         raise HTTPException(status_code=404, detail="Workspace not found")
 
-    bp = await get_brand_profile(db, workspace_id)
-    if not bp or bp.onboarding_status != "active":
+    bp = await get_analysis_subject(db, workspace_id)
+    if not bp or bp.setup_status not in ("active", "complete"):
         raise HTTPException(
             status_code=400,
-            detail="Brand profile required to start a chat session",
+            detail="Analysis subject required to start a chat session",
         )
 
     session = await get_session(db, workspace_id, session_id)
@@ -180,7 +180,7 @@ async def send_message(
     chunks = await search_knowledge(user_content, workspace_id, db, k=3)
     retrieved_context = "\n---\n".join(c.content for c in chunks)
 
-    brand_dict = brand_profile_to_dict(bp)
+    brand_dict = analysis_subject_to_dict(bp)
 
     import uuid
     placeholder_id = str(uuid.uuid4())

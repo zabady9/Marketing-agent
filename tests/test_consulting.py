@@ -1,9 +1,63 @@
-"""Unit tests for consulting analysis — citation validation and threshold checks."""
+"""Unit tests for consulting analysis — citation validation, threshold checks, and intent classifier."""
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.agents.consulting_agent import _build_queries
 from app.agents.consulting_schemas import Citation, FeasibilitySection, SWOTItem, SWOTOutput
+from app.agents.intent_agent import AnalystIntentClassification
+
+
+# ── _build_queries ─────────────────────────────────────────────────────────────
+
+_BRAND = {"industry": "food delivery", "subject_name": "TestBrand"}
+
+
+def test_build_queries_no_context_returns_template_count():
+    queries = _build_queries("pestel", _BRAND)
+    assert len(queries) == 4
+
+
+def test_build_queries_context_appends_two_targeted_queries():
+    question = "What regulations affect UAE expansion?"
+    queries = _build_queries("pestel", _BRAND, context=question)
+    assert len(queries) == 6
+    assert question[:200] in queries
+    assert f"food delivery {question[:150]}" in queries
+
+
+def test_build_queries_context_truncated_to_limits():
+    long_q = "x" * 300
+    queries = _build_queries("swot", _BRAND, context=long_q)
+    raw_appended = next(q for q in queries if q.startswith("x"))
+    assert len(raw_appended) <= 200
+    industry_prefixed = next(q for q in queries if q.startswith("food delivery x"))
+    assert "x" * 151 not in industry_prefixed
+
+
+# ── classify_analyst_intent ───────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_classify_analyst_intent_passes_message_to_llm_and_returns_result():
+    expected = AnalystIntentClassification(intent="swot", reasoning="mentions strengths and threats")
+    mock_llm = MagicMock()
+    mock_llm.with_structured_output.return_value = AsyncMock(ainvoke=AsyncMock(return_value=expected))
+    with patch("app.agents.intent_agent.get_llm", return_value=mock_llm):
+        from app.agents.intent_agent import classify_analyst_intent
+        result = await classify_analyst_intent("What are our biggest strengths and threats?", _BRAND)
+    assert result.intent == "swot"
+    assert result.reasoning == "mentions strengths and threats"
+
+
+@pytest.mark.asyncio
+async def test_classify_analyst_intent_content_creation_is_out_of_scope():
+    expected = AnalystIntentClassification(intent="out_of_scope", reasoning="post creation request")
+    mock_llm = MagicMock()
+    mock_llm.with_structured_output.return_value = AsyncMock(ainvoke=AsyncMock(return_value=expected))
+    with patch("app.agents.intent_agent.get_llm", return_value=mock_llm):
+        from app.agents.intent_agent import classify_analyst_intent
+        result = await classify_analyst_intent("Write me a social media post", _BRAND)
+    assert result.intent == "out_of_scope"
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -153,7 +207,7 @@ async def test_insufficient_citations_fails_without_calling_run_analysis():
 
     mock_run_analysis.assert_not_called()
     assert mock_analysis.status == "failed"
-    assert "Insufficient sources found (2)" in mock_analysis.error
+    assert "Could not retrieve enough sources (2)" in mock_analysis.error
 
     emitted_types = [call.args[1].get("type") for call in mock_bus.emit.call_args_list]
     assert "error" in emitted_types

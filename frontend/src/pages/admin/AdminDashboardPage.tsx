@@ -33,25 +33,16 @@ export default function AdminDashboardPage() {
         </div>
       </div>
 
-      <div className="mb-8">
-        <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">الخطط</h2>
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-          <StatCard label="جاهز" value={stats.plans_ready} color="text-green-600" />
-          <StatCard label="جارٍ التوليد" value={stats.plans_generating} color="text-yellow-600" />
-          <StatCard label="فشل" value={stats.plans_failed} color="text-red-500" />
+      {stats.reports_ready != null && (
+        <div className="mb-8">
+          <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">التقارير</h2>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+            <StatCard label="جاهز" value={stats.reports_ready ?? 0} color="text-green-600" />
+            <StatCard label="جارٍ التوليد" value={stats.reports_generating ?? 0} color="text-yellow-600" />
+            <StatCard label="فشل" value={stats.reports_failed ?? 0} color="text-red-500" />
+          </div>
         </div>
-      </div>
-
-      <div>
-        <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">المنشورات</h2>
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-          <StatCard label="في انتظار الموافقة" value={stats.posts_pending} color="text-yellow-600" />
-          <StatCard label="مُعتمد" value={stats.posts_approved} color="text-green-600" />
-          <StatCard label="مُجدول" value={stats.posts_scheduled} color="text-blue-600" />
-          <StatCard label="منشور" value={stats.posts_published} color="text-purple-600" />
-          <StatCard label="مرفوض" value={stats.posts_rejected} color="text-red-500" />
-        </div>
-      </div>
+      )}
     </div>
   )
 }

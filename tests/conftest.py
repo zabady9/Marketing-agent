@@ -3,9 +3,12 @@ import os
 # Set before any app imports so settings and engine pick up the local URL.
 os.environ.setdefault(
     "DATABASE_URL",
-    "postgresql+asyncpg://postgres:changeme@localhost:5432/marketing",
+    "postgresql+asyncpg://postgres:changeme@localhost:5432/analyst",
 )
 os.environ.setdefault("LANGSMITH_TRACING", "false")
+# Signal test mode so app/database.py switches to NullPool, preventing
+# cross-event-loop connection reuse between per-function test loops.
+os.environ.setdefault("TESTING", "true")
 
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport

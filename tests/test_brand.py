@@ -1,124 +1,106 @@
 import pytest
 
 
-BRAND_PAYLOAD = {
-    "brand_name": "Acme Corp",
-    "company_name": "Acme Corporation",
+SUBJECT_PAYLOAD = {
+    "subject_name": "Acme Corp",
+    "legal_name": "Acme Corporation",
     "industry": "SaaS",
-    "tone": "professional",
-    "avoid": ["spam", "clickbait"],
-    "audience_segments": [
+    "tracked_competitors": [
         {
-            "name": "SMB Founders",
-            "description": "Small business owners",
-            "pain_points": ["too much manual work"],
-            "channels": ["LinkedIn"],
+            "name": "Rival Co",
+            "description": "Main competitor in the SMB space",
+            "notes": "Strong brand recognition",
         }
     ],
-    "goals": ["grow LinkedIn following", "launch new product"],
+    "areas_of_interest": ["market size trends", "competitive position"],
+    "business_lines": [
+        {"name": "Analytics Platform", "description": "Core SaaS product", "notes": None}
+    ],
 }
 
 
 @pytest.mark.asyncio
-async def test_upsert_then_get_brand(test_client):
-    ws = await test_client.post("/api/workspaces", json={"name": "Brand WS"})
+async def test_upsert_then_get_subject(test_client):
+    ws = await test_client.post("/api/workspaces", json={"name": "Subject WS"})
     workspace_id = ws.json()["id"]
 
     resp = await test_client.put(
-        f"/api/workspaces/{workspace_id}/brand-profile", json=BRAND_PAYLOAD
+        f"/api/workspaces/{workspace_id}/analysis-subject", json=SUBJECT_PAYLOAD
     )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["brand_name"] == "Acme Corp"
-    assert body["company_name"] == "Acme Corporation"
+    assert body["subject_name"] == "Acme Corp"
+    assert body["legal_name"] == "Acme Corporation"
     assert body["industry"] == "SaaS"
-    assert body["avoid"] == ["spam", "clickbait"]
     assert body["workspace_id"] == workspace_id
-    assert len(body["audience_segments"]) == 1
-    assert body["audience_segments"][0]["name"] == "SMB Founders"
-    assert body["goals"] == ["grow LinkedIn following", "launch new product"]
-    assert body["onboarding_status"] == "in_progress"
+    assert len(body["tracked_competitors"]) == 1
+    assert body["tracked_competitors"][0]["name"] == "Rival Co"
+    assert body["areas_of_interest"] == ["market size trends", "competitive position"]
+    assert body["setup_status"] == "in_progress"
 
-    resp2 = await test_client.get(f"/api/workspaces/{workspace_id}/brand-profile")
+    resp2 = await test_client.get(f"/api/workspaces/{workspace_id}/analysis-subject")
     assert resp2.status_code == 200
-    assert resp2.json()["tone"] == "professional"
+    assert resp2.json()["subject_name"] == "Acme Corp"
 
 
 @pytest.mark.asyncio
-async def test_second_put_updates_brand(test_client):
-    ws = await test_client.post("/api/workspaces", json={"name": "Brand WS 2"})
+async def test_second_put_updates_subject(test_client):
+    ws = await test_client.post("/api/workspaces", json={"name": "Subject WS 2"})
     workspace_id = ws.json()["id"]
 
     await test_client.put(
-        f"/api/workspaces/{workspace_id}/brand-profile", json=BRAND_PAYLOAD
+        f"/api/workspaces/{workspace_id}/analysis-subject", json=SUBJECT_PAYLOAD
     )
 
-    updated = {**BRAND_PAYLOAD, "tone": "casual"}
     resp = await test_client.put(
-        f"/api/workspaces/{workspace_id}/brand-profile", json=updated
+        f"/api/workspaces/{workspace_id}/analysis-subject",
+        json={"subject_description": "Updated description"},
     )
     assert resp.status_code == 200
-    assert resp.json()["tone"] == "casual"
+    assert resp.json()["subject_description"] == "Updated description"
+    assert resp.json()["subject_name"] == "Acme Corp"
 
 
 @pytest.mark.asyncio
-async def test_get_brand_not_set(test_client):
-    ws = await test_client.post("/api/workspaces", json={"name": "Empty WS"})
+async def test_get_subject_not_set(test_client):
+    ws = await test_client.post("/api/workspaces", json={"name": "Empty Subject WS"})
     workspace_id = ws.json()["id"]
-    resp = await test_client.get(f"/api/workspaces/{workspace_id}/brand-profile")
+    resp = await test_client.get(f"/api/workspaces/{workspace_id}/analysis-subject")
     assert resp.status_code == 404
 
 
 @pytest.mark.asyncio
 async def test_partial_update_preserves_existing_fields(test_client):
-    ws = await test_client.post("/api/workspaces", json={"name": "Partial WS"})
+    ws = await test_client.post("/api/workspaces", json={"name": "Partial Subject WS"})
     workspace_id = ws.json()["id"]
 
     await test_client.put(
-        f"/api/workspaces/{workspace_id}/brand-profile", json=BRAND_PAYLOAD
+        f"/api/workspaces/{workspace_id}/analysis-subject", json=SUBJECT_PAYLOAD
     )
 
-    # Only update tone — other fields should remain unchanged
     resp = await test_client.put(
-        f"/api/workspaces/{workspace_id}/brand-profile",
-        json={"tone": "witty"},
+        f"/api/workspaces/{workspace_id}/analysis-subject",
+        json={"subject_description": "Brief overview"},
     )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["tone"] == "witty"
-    assert body["brand_name"] == "Acme Corp"
+    assert body["subject_description"] == "Brief overview"
+    assert body["subject_name"] == "Acme Corp"
     assert body["industry"] == "SaaS"
 
 
 @pytest.mark.asyncio
-async def test_onboarding_status_can_be_set(test_client):
-    ws = await test_client.post("/api/workspaces", json={"name": "Onboarding WS"})
+async def test_setup_status_can_be_set(test_client):
+    ws = await test_client.post("/api/workspaces", json={"name": "Setup Status WS"})
     workspace_id = ws.json()["id"]
 
     await test_client.put(
-        f"/api/workspaces/{workspace_id}/brand-profile", json=BRAND_PAYLOAD
+        f"/api/workspaces/{workspace_id}/analysis-subject", json=SUBJECT_PAYLOAD
     )
 
     resp = await test_client.put(
-        f"/api/workspaces/{workspace_id}/brand-profile",
-        json={"onboarding_status": "active"},
+        f"/api/workspaces/{workspace_id}/analysis-subject",
+        json={"setup_status": "active"},
     )
     assert resp.status_code == 200
-    assert resp.json()["onboarding_status"] == "active"
-
-
-@pytest.mark.asyncio
-async def test_deprecated_brand_alias_still_works(test_client):
-    ws = await test_client.post("/api/workspaces", json={"name": "Alias WS"})
-    workspace_id = ws.json()["id"]
-
-    resp = await test_client.put(
-        f"/api/workspaces/{workspace_id}/brand",
-        json={"brand_name": "Alias Brand", "tone": "bold"},
-    )
-    assert resp.status_code == 200
-    assert resp.json()["brand_name"] == "Alias Brand"
-
-    resp2 = await test_client.get(f"/api/workspaces/{workspace_id}/brand")
-    assert resp2.status_code == 200
-    assert resp2.json()["brand_name"] == "Alias Brand"
+    assert resp.json()["setup_status"] == "active"

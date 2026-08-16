@@ -1,7 +1,7 @@
 .PHONY: dev dev-build test test-local lint migrate migrate-create migrate-down \
         logs down clean ssl-init ssl-renew
 
-DOMAIN ?= marketing.yourdomain.com
+DOMAIN ?= analyst.yourdomain.com
 CERTBOT_EMAIL ?= admin@yourdomain.com
 
 dev:

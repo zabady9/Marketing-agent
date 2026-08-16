@@ -8,7 +8,6 @@ import {
   getChatSession,
   listChatSessions,
   sendChatMessage,
-  submitDraftPost,
 } from '../api'
 import type { ChatMessage, ChatSession, ChatSessionDetail, ConsultVisuals } from '../types'
 import VisualRenderer from '../components/VisualRenderer'
@@ -19,11 +18,11 @@ const BASE = import.meta.env.VITE_API_URL ?? ''
 interface AgentInfo { name: string; role: string; avatarBg: string }
 
 const AGENT_PERSONAS: Record<string, AgentInfo> = {
-  strategist:     { name: 'Sam',    role: 'Strategist',     avatarBg: 'bg-indigo-500' },
-  copywriter:     { name: 'Alex',   role: 'Copywriter',     avatarBg: 'bg-purple-500' },
-  seo_analyst:    { name: 'Jordan', role: 'SEO Analyst',    avatarBg: 'bg-green-500'  },
-  brand_guardian: { name: 'Morgan', role: 'Brand Guardian', avatarBg: 'bg-amber-500'  },
-  chief_of_staff: { name: 'Casey',  role: 'Chief of Staff', avatarBg: 'bg-slate-500'  },
+  insights_director: { name: 'Insights Director', role: 'Strategic Analysis',      avatarBg: 'bg-indigo-500' },
+  quant_analyst:     { name: 'Quant Analyst',      role: 'Quantitative Analysis',   avatarBg: 'bg-purple-500' },
+  data_scout:        { name: 'Data Scout',         role: 'Market Intelligence',     avatarBg: 'bg-green-500'  },
+  domain_specialist: { name: 'Domain Specialist',  role: 'Competitive Intelligence', avatarBg: 'bg-amber-500'  },
+  lead_analyst:      { name: 'Lead Analyst',       role: 'Synthesis',               avatarBg: 'bg-slate-500'  },
 }
 
 // ── types ─────────────────────────────────────────────────────────────────────
@@ -50,8 +49,8 @@ function groupMessages(messages: ChatMessage[]): MessageGroup[] {
       }
       groups.push({
         type: 'meeting',
-        teamTurns: batch.filter(m => m.agent_id !== 'chief_of_staff'),
-        synthesis: batch.find(m => m.agent_id === 'chief_of_staff') ?? null,
+        teamTurns: batch.filter(m => m.agent_id !== 'lead_analyst'),
+        synthesis: batch.find(m => m.agent_id === 'lead_analyst') ?? null,
       })
     } else {
       groups.push({ type: 'single', message: msg })
@@ -211,13 +210,13 @@ export default function ChatPage() {
         setMeetingPhase('concluded')
 
       } else if (ev.type === 'synthesis_start') {
-        const agent: CurrentAgent = { id: 'chief_of_staff', name: 'Casey', bidReason: '' }
+        const agent: CurrentAgent = { id: 'lead_analyst', name: 'Lead Analyst', bidReason: '' }
         setMeetingPhase('synthesis'); setCurrentAgent(agent); currentAgentRef.current = agent
         currentStreamRef.current = ''; setStreamingContent('')
 
       } else if (ev.type === 'synthesis_end') {
         const content = currentStreamRef.current
-        if (content) setLiveAgentMessages(prev => [...prev, { agentId: 'chief_of_staff', agentName: 'Casey', content }])
+        if (content) setLiveAgentMessages(prev => [...prev, { agentId: 'lead_analyst', agentName: 'Lead Analyst', content }])
         currentStreamRef.current = ''
 
       } else if (ev.type === 'done') {
@@ -348,13 +347,6 @@ export default function ChatPage() {
     finally { setSending(false) }
   }
 
-  async function handleSubmitDraft(postId: string) {
-    try {
-      await submitDraftPost(postId)
-      if (wsId && sessionId) getChatSession(wsId, sessionId).then(setDetail)
-    } catch (err) { setError(err instanceof Error ? err.message : 'فشل إرسال المسودة') }
-  }
-
   const groups = groupMessages(detail?.messages ?? [])
 
   return (
@@ -407,8 +399,8 @@ export default function ChatPage() {
                 {/* Persisted messages — meetings grouped as discussion + synthesis */}
                 {groups.map((g, i) =>
                   g.type === 'single'
-                    ? <MessageBubble key={g.message.id} message={g.message} onSubmitDraft={handleSubmitDraft} visuals={visualsByMessageId[g.message.id]} isGeneratingVisuals={generatingVisualsForMessageId === g.message.id} />
-                    : <MeetingGroup key={i} teamTurns={g.teamTurns} synthesis={g.synthesis} onSubmitDraft={handleSubmitDraft} visualsByMessageId={visualsByMessageId} generatingVisualsForMessageId={generatingVisualsForMessageId} />
+                    ? <MessageBubble key={g.message.id} message={g.message} visuals={visualsByMessageId[g.message.id]} isGeneratingVisuals={generatingVisualsForMessageId === g.message.id} />
+                    : <MeetingGroup key={i} teamTurns={g.teamTurns} synthesis={g.synthesis} visualsByMessageId={visualsByMessageId} generatingVisualsForMessageId={generatingVisualsForMessageId} />
                 )}
 
                 {/* Live meeting: compact collapsible discussion panel */}
@@ -473,10 +465,9 @@ export default function ChatPage() {
 
 // ── persisted meeting group ───────────────────────────────────────────────────
 
-function MeetingGroup({ teamTurns, synthesis, onSubmitDraft, visualsByMessageId, generatingVisualsForMessageId }: {
+function MeetingGroup({ teamTurns, synthesis, visualsByMessageId, generatingVisualsForMessageId }: {
   teamTurns: ChatMessage[]
   synthesis: ChatMessage | null
-  onSubmitDraft: (id: string) => void
   visualsByMessageId: Record<string, ConsultVisuals>
   generatingVisualsForMessageId: string | null
 }) {
@@ -508,7 +499,6 @@ function MeetingGroup({ teamTurns, synthesis, onSubmitDraft, visualsByMessageId,
       {synthesis && (
         <MessageBubble
           message={synthesis}
-          onSubmitDraft={onSubmitDraft}
           visuals={visualsByMessageId[synthesis.id]}
           isGeneratingVisuals={generatingVisualsForMessageId === synthesis.id}
         />
@@ -636,14 +626,12 @@ function ToolBadges({ tools, compact }: { tools: ActiveTool[]; compact?: boolean
   )
 }
 
-function MessageBubble({ message, onSubmitDraft, visuals, isGeneratingVisuals }: {
+function MessageBubble({ message, visuals, isGeneratingVisuals }: {
   message: ChatMessage
-  onSubmitDraft: (id: string) => void
   visuals?: ConsultVisuals
   isGeneratingVisuals?: boolean
 }) {
   const isUser = message.role === 'user'
-  const draftPostId = message.metadata_?.draft_post_id as string | undefined
 
   if (isUser) {
     return (
@@ -660,7 +648,6 @@ function MessageBubble({ message, onSubmitDraft, visuals, isGeneratingVisuals }:
     <div className="flex justify-end">
       <div className="max-w-2xl w-full bg-white border border-gray-200 rounded-2xl px-4 py-3 shadow-sm text-gray-800">
         <MarkdownContent content={message.content} />
-        {draftPostId && <DraftButton postId={draftPostId} onSubmit={onSubmitDraft} />}
         {visuals && visuals.visuals.length > 0 && (
           <VisualRenderer visuals={visuals.visuals} sources={visuals.sources} />
         )}
@@ -674,14 +661,6 @@ function MessageBubble({ message, onSubmitDraft, visuals, isGeneratingVisuals }:
         )}
       </div>
     </div>
-  )
-}
-
-function DraftButton({ postId, onSubmit }: { postId: string; onSubmit: (id: string) => void }) {
-  return (
-    <button onClick={() => onSubmit(postId)} className="mt-2 text-xs bg-white text-indigo-700 border border-indigo-300 rounded-full px-3 py-1 hover:bg-indigo-50 transition-colors">
-      إرسال للموافقة
-    </button>
   )
 }
 

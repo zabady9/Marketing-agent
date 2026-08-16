@@ -10,19 +10,19 @@ from app.models.consulting_analysis import ConsultingAnalysis
 from app.schemas.consulting import ConsultingAnalysisRequest, ConsultingAnalysisResponse
 from app.agents.eval_agent import run_eval
 from app.services import event_bus
-from app.services.brand_profile import brand_profile_to_dict, get_brand_profile
+from app.services.analysis_subject import analysis_subject_to_dict, get_analysis_subject
 from app.services.consulting import run_consulting_analysis
 from app.services.workspace import get_workspace
 
-router = APIRouter(tags=["consulting"])
+router = APIRouter(tags=["reports"])
 
 
 @router.post(
-    "/{workspace_id}/analyses:generate",
+    "/{workspace_id}/reports:generate",
     response_model=ConsultingAnalysisResponse,
     status_code=202,
 )
-async def generate_analysis(
+async def generate_report(
     workspace_id: str,
     data: ConsultingAnalysisRequest,
     background_tasks: BackgroundTasks,
@@ -32,9 +32,9 @@ async def generate_analysis(
     if not ws:
         raise HTTPException(status_code=404, detail="Workspace not found")
 
-    bp = await get_brand_profile(db, workspace_id)
+    bp = await get_analysis_subject(db, workspace_id)
     if not bp:
-        raise HTTPException(status_code=422, detail="Brand profile not set — call PUT /brand-profile first")
+        raise HTTPException(status_code=422, detail="Analysis subject not set — call PUT /analysis-subject first")
 
     analysis = ConsultingAnalysis(
         workspace_id=workspace_id,
@@ -45,7 +45,7 @@ async def generate_analysis(
     await db.commit()
     await db.refresh(analysis)
 
-    brand_dict = brand_profile_to_dict(bp)
+    brand_dict = analysis_subject_to_dict(bp)
 
     event_bus.create(analysis.id)
 
@@ -69,8 +69,8 @@ async def generate_analysis(
     )
 
 
-@router.get("/{workspace_id}/analyses", response_model=list[ConsultingAnalysisResponse])
-async def list_analyses(
+@router.get("/{workspace_id}/reports", response_model=list[ConsultingAnalysisResponse])
+async def list_reports(
     workspace_id: str,
     db: AsyncSession = Depends(get_db),
 ):
@@ -99,21 +99,21 @@ async def list_analyses(
     ]
 
 
-@router.get("/{workspace_id}/analyses/{analysis_id}", response_model=ConsultingAnalysisResponse)
-async def get_analysis(
+@router.get("/{workspace_id}/reports/{report_id}", response_model=ConsultingAnalysisResponse)
+async def get_report(
     workspace_id: str,
-    analysis_id: str,
+    report_id: str,
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
         select(ConsultingAnalysis).where(
-            ConsultingAnalysis.id == analysis_id,
+            ConsultingAnalysis.id == report_id,
             ConsultingAnalysis.workspace_id == workspace_id,
         )
     )
     analysis = result.scalar_one_or_none()
     if not analysis:
-        raise HTTPException(status_code=404, detail="Analysis not found")
+        raise HTTPException(status_code=404, detail="Report not found")
 
     return ConsultingAnalysisResponse(
         id=analysis.id,
@@ -126,21 +126,21 @@ async def get_analysis(
     )
 
 
-@router.get("/{workspace_id}/analyses/{analysis_id}/stream")
-async def stream_analysis(
+@router.get("/{workspace_id}/reports/{report_id}/stream")
+async def stream_report(
     workspace_id: str,
-    analysis_id: str,
+    report_id: str,
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
         select(ConsultingAnalysis).where(
-            ConsultingAnalysis.id == analysis_id,
+            ConsultingAnalysis.id == report_id,
             ConsultingAnalysis.workspace_id == workspace_id,
         )
     )
     analysis = result.scalar_one_or_none()
     if not analysis:
-        raise HTTPException(status_code=404, detail="Analysis not found")
+        raise HTTPException(status_code=404, detail="Report not found")
 
     if analysis.status in ("ready", "failed"):
         async def immediate():
@@ -153,7 +153,7 @@ async def stream_analysis(
 
     async def generator():
         while True:
-            event = await event_bus.read(analysis_id, timeout=25.0)
+            event = await event_bus.read(report_id, timeout=25.0)
             if event is None:
                 yield f"data: {json.dumps({'type': 'done'})}\n\n"
                 break
@@ -171,26 +171,26 @@ async def stream_analysis(
     )
 
 
-@router.post("/{workspace_id}/analyses/{analysis_id}:evaluate", response_model=ConsultingAnalysisResponse)
-async def evaluate_analysis(
+@router.post("/{workspace_id}/reports/{report_id}:evaluate", response_model=ConsultingAnalysisResponse)
+async def evaluate_report(
     workspace_id: str,
-    analysis_id: str,
+    report_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """Re-run eval on a completed analysis and update results.eval in place."""
+    """Re-run eval on a completed report and update results.eval in place."""
     result = await db.execute(
         select(ConsultingAnalysis).where(
-            ConsultingAnalysis.id == analysis_id,
+            ConsultingAnalysis.id == report_id,
             ConsultingAnalysis.workspace_id == workspace_id,
         )
     )
     analysis = result.scalar_one_or_none()
     if not analysis:
-        raise HTTPException(status_code=404, detail="Analysis not found")
+        raise HTTPException(status_code=404, detail="Report not found")
     if analysis.status != "ready":
-        raise HTTPException(status_code=422, detail="Analysis must be in ready status to evaluate")
+        raise HTTPException(status_code=422, detail="Report must be in ready status to evaluate")
     if not analysis.results:
-        raise HTTPException(status_code=422, detail="Analysis has no stored results to evaluate")
+        raise HTTPException(status_code=422, detail="Report has no stored results to evaluate")
 
     stored = analysis.results
     eval_output = await run_eval(

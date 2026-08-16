@@ -52,12 +52,12 @@ alembic/versions/
 ## Running
 
 ```bash
-# Local dev (Postgres at localhost:5432/marketing)
-DATABASE_URL=postgresql+asyncpg://postgres:changeme@localhost:5432/marketing \
+# Local dev (Postgres at localhost:5432/analyst)
+DATABASE_URL=postgresql+asyncpg://postgres:changeme@localhost:5432/analyst \
   /opt/miniconda3/envs/Marketing-agent/bin/uvicorn app.main:app --reload --port 8000
 
 # Local tests
-DATABASE_URL=postgresql+asyncpg://postgres:changeme@localhost:5432/marketing \
+DATABASE_URL=postgresql+asyncpg://postgres:changeme@localhost:5432/analyst \
   /opt/miniconda3/envs/Marketing-agent/bin/python -m pytest tests/ -v
 
 # Docker: make dev-build → API at http://localhost:8001
@@ -190,11 +190,10 @@ return StreamingResponse(generator(), media_type="text/event-stream")
 ## Environment Variables
 
 ```env
-DATABASE_URL=postgresql+asyncpg://postgres:changeme@db:5432/marketing
+DATABASE_URL=postgresql+asyncpg://postgres:changeme@db:5432/analyst
 GOOGLE_API_KEY=<key>
 REASONING_MODEL=gemini-2.5-pro  CHEAP_MODEL=gemini-2.5-flash  MAX_TOKENS=8192
 EMBEDDING_MODEL=BAAI/bge-base-en-v1.5  EMBEDDING_DIMENSION=768
 UPLOADS_DIR=/app/uploads
-POSTIZ_API_URL=http://postiz:5000  POSTIZ_API_KEY=<key>
 ADMIN_API_KEY=<key>  ALLOWED_ORIGINS=["http://localhost:3000"]
 ```

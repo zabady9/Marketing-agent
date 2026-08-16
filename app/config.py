@@ -12,14 +12,14 @@ class Settings(BaseSettings):
     )
 
     # Application
-    app_name: str = "marketing-agent"
+    app_name: str = "analyst-agent"
     app_version: str = "0.1.0"
     environment: str = Field(default="development", alias="APP_ENV")
     debug: bool = False
     allowed_origins: list[str] = ["http://localhost:3000", "http://localhost:8001"]
 
     # Database
-    database_url: str = "postgresql+asyncpg://postgres:changeme@db:5432/marketing"
+    database_url: str = "postgresql+asyncpg://postgres:changeme@db:5432/analyst"
 
     @field_validator("database_url", mode="before")
     @classmethod
@@ -43,14 +43,10 @@ class Settings(BaseSettings):
     # LangSmith
     langsmith_tracing: bool = False
     langsmith_api_key: SecretStr | None = None
-    langsmith_project: str = "marketing-agent"
+    langsmith_project: str = "analyst-agent"
 
     # Admin
     admin_api_key: SecretStr = Field(default=SecretStr(""))
-
-    # Postiz
-    postiz_api_url: str = "http://postiz:5000"
-    postiz_api_key: SecretStr = Field(default=SecretStr("placeholder"))
 
     # Embeddings (open-source, in-process via sentence-transformers)
     embedding_model: str = "BAAI/bge-base-en-v1.5"

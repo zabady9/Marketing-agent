@@ -14,11 +14,14 @@ from app.database import Base
 
 # TTL in hours per metric type — slower-changing data gets longer TTL.
 TTL_HOURS: dict[str, int] = {
-    "followers":      168,  # 7 days
-    "pricing":        168,  # 7 days
-    "engagement_rate": 48,  # 2 days
-    "campaign":        24,  # 1 day
-    "recent_posts":    24,  # 1 day
+    "revenue":         720,  # 30 days — annual/quarterly figures change rarely
+    "funding":         720,  # 30 days — funding rounds are infrequent
+    "headcount":       168,  # 7 days
+    "market_share":    168,  # 7 days
+    "growth_rate":     168,  # 7 days
+    "pricing":         168,  # 7 days
+    "product_launches":  48,  # 2 days
+    "news_sentiment":    24,  # 1 day — news is time-sensitive
 }
 
 METRIC_TYPES: tuple[str, ...] = tuple(TTL_HOURS.keys())

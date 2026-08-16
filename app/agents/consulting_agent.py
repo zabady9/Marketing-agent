@@ -98,8 +98,8 @@ _SYSTEM_PROMPTS: dict[str, str] = {
 
 def _build_queries(analysis_type: str, brand_profile: dict, context: str | None = None) -> list[str]:
     industry = brand_profile.get("industry") or "general business"
-    brand_name = brand_profile.get("brand_name") or brand_profile.get("company_name") or "the company"
-    products = brand_profile.get("products") or []
+    brand_name = brand_profile.get("subject_name") or brand_profile.get("legal_name") or "the company"
+    products = brand_profile.get("business_lines") or []
     products_summary = ", ".join(p.get("name", "") for p in products[:3]) if products else "products"
 
     templates = _SEARCH_QUERIES.get(analysis_type, _SEARCH_QUERIES["swot"])
@@ -225,12 +225,11 @@ async def run_analysis(
     llm = get_llm("reasoning").with_structured_output(schema, method="json_schema")
 
     bp_summary = (
-        f"Brand: {brand_profile.get('brand_name') or brand_profile.get('company_name', 'N/A')}\n"
+        f"Subject: {brand_profile.get('subject_name') or brand_profile.get('legal_name', 'N/A')}\n"
         f"Industry: {brand_profile.get('industry', 'N/A')}\n"
-        f"Products: {', '.join(p.get('name','') for p in (brand_profile.get('products') or [])[:5])}\n"
-        f"Goals: {', '.join((brand_profile.get('goals') or [])[:3])}\n"
-        f"Positioning: {brand_profile.get('positioning', 'N/A')}\n"
-        f"Tone: {brand_profile.get('tone', 'N/A')}"
+        f"Business Lines: {', '.join(p.get('name','') for p in (brand_profile.get('business_lines') or [])[:5])}\n"
+        f"Areas of Interest: {', '.join((brand_profile.get('areas_of_interest') or [])[:3])}\n"
+        f"Description: {brand_profile.get('subject_description', 'N/A')}"
     )
 
     citations_text = _format_citations_for_prompt(citations) if citations else "No external sources found."

@@ -28,30 +28,12 @@ for _noisy_logger in ("langchain_core", "langsmith", "langchain_google_genai"):
 from app.config import settings
 from app.database import engine
 from app.routers import health
-from app.routers import workspaces, brand_profiles, plans, posts, connections, admin, knowledge, chat, consulting, consult
+from app.routers import workspaces, analysis_subjects, admin, knowledge, chat, reports
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    from psycopg_pool import AsyncConnectionPool
-    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-    from app.agents.graph import init_graph
-    from app.services.recovery import recover_stuck_plans
-
-    pool = AsyncConnectionPool(
-        conninfo=settings.checkpointer_conn_str,
-        open=False,
-        kwargs={"autocommit": True},
-    )
-    await pool.open()
-    checkpointer = AsyncPostgresSaver(pool)
-    await checkpointer.setup()  # creates checkpoint tables; intentionally bypasses Alembic
-    init_graph(checkpointer)
-    await recover_stuck_plans(checkpointer)
-
     yield
-
-    await pool.close()
     await engine.dispose()
 
 
@@ -71,14 +53,10 @@ def create_app() -> FastAPI:
     )
     app.include_router(health.router, prefix="/api")
     app.include_router(workspaces.router, prefix="/api")
-    app.include_router(brand_profiles.router, prefix="/api")
-    app.include_router(plans.router, prefix="/api")
-    app.include_router(posts.router, prefix="/api")
-    app.include_router(connections.router, prefix="/api")
+    app.include_router(analysis_subjects.router, prefix="/api")
     app.include_router(knowledge.router, prefix="/api")
     app.include_router(chat.router, prefix="/api")
-    app.include_router(consulting.router, prefix="/api/workspaces")
-    app.include_router(consult.router, prefix="/api/workspaces")
+    app.include_router(reports.router, prefix="/api/workspaces")
     app.include_router(admin.router, prefix="/api")
     return app
 
