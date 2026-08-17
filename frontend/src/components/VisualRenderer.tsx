@@ -75,7 +75,8 @@ function BlockContent({ block }: { block: VisualBlock }) {
     case 'gauge':            return <GaugeBlock data={block.data} />
     case 'comparison_grid':  return <ComparisonGridBlock data={block.data} />
     case 'timeline':         return <TimelineBlock data={block.data} />
-    // word_cloud and progress_list are pass-2 — render nothing, no crash
+    case 'word_cloud':       return <WordCloudBlock data={block.data} />
+    case 'progress_list':    return <ProgressListBlock data={block.data} />
     default:                 return null
   }
 }
@@ -385,6 +386,72 @@ function TimelineBlock({ data }: { data: Record<string, unknown> }) {
         </li>
       ))}
     </ol>
+  )
+}
+
+// ── word cloud ────────────────────────────────────────────────────────────────
+
+interface WordEntry { text: string; weight: number }
+
+function WordCloudBlock({ data }: { data: Record<string, unknown> }) {
+  const words = (Array.isArray(data.words) ? (data.words as WordEntry[]) : []).filter(
+    (w) => w && typeof w.text === 'string'
+  )
+  if (!words.length) return null
+
+  const maxWeight = Math.max(...words.map((w) => w.weight ?? 1), 1)
+  const minSize = 11
+  const maxSize = 32
+
+  return (
+    <div className="flex flex-wrap gap-2 px-2 py-3 items-center justify-center">
+      {words.map((w, i) => {
+        const ratio = (w.weight ?? 1) / maxWeight
+        const fontSize = Math.round(minSize + ratio * (maxSize - minSize))
+        const color = COLORS[i % COLORS.length]
+        return (
+          <span
+            key={i}
+            style={{ fontSize, color, lineHeight: 1.3 }}
+            className="font-medium transition-opacity hover:opacity-80"
+          >
+            {w.text}
+          </span>
+        )
+      })}
+    </div>
+  )
+}
+
+// ── progress list ─────────────────────────────────────────────────────────────
+
+interface ProgressItem { label: string; value: number; max: number }
+
+function ProgressListBlock({ data }: { data: Record<string, unknown> }) {
+  const items = (Array.isArray(data.items) ? (data.items as ProgressItem[]) : []).filter(Boolean)
+  if (!items.length) return null
+
+  return (
+    <ul className="space-y-3 px-1">
+      {items.map((item, i) => {
+        const pct = Math.min(100, Math.round(((item.value ?? 0) / (item.max || 100)) * 100))
+        const color = COLORS[i % COLORS.length]
+        return (
+          <li key={i}>
+            <div className="flex justify-between text-sm mb-1">
+              <span className="text-gray-700 font-medium">{item.label}</span>
+              <span className="text-gray-500 tabular-nums">{item.value} / {item.max}</span>
+            </div>
+            <div className="h-2 w-full rounded-full bg-gray-100 overflow-hidden">
+              <div
+                className="h-full rounded-full transition-all duration-500"
+                style={{ width: `${pct}%`, backgroundColor: color }}
+              />
+            </div>
+          </li>
+        )
+      })}
+    </ul>
   )
 }
 

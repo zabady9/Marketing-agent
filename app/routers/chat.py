@@ -176,8 +176,8 @@ async def send_message(
     await auto_title_session(db, session, user_content)
     await db.commit()
 
-    # Pre-retrieve top-3 knowledge chunks as baseline context
-    chunks = await search_knowledge(user_content, workspace_id, db, k=3)
+    # Pre-retrieve top-5 knowledge chunks as baseline context
+    chunks = await search_knowledge(user_content, workspace_id, db, k=5)
     retrieved_context = "\n---\n".join(c.content for c in chunks)
 
     brand_dict = analysis_subject_to_dict(bp)

@@ -125,11 +125,11 @@ async def gather_research(
     context: str | None = None,
 ) -> list[Citation]:
     """Run targeted DuckDuckGo searches and return deduplicated citations."""
+    from app.services.fact_dedup import deduplicate_sources
+
     queries = _build_queries(analysis_type, brand_profile, context)
 
-    seen_urls: set[str] = set()
-    citations: list[Citation] = []
-
+    raw_results: list[dict] = []
     for query in queries:
         try:
             results = await asyncio.to_thread(_ddg_search, query, 6)
@@ -139,19 +139,25 @@ async def gather_research(
 
         for r in results:
             url = r.get("href", "")
-            if not url or url in seen_urls:
+            if not url:
                 continue
-            seen_urls.add(url)
-            citations.append(Citation(
-                title=r.get("title", ""),
-                url=url,
-                snippet=(r.get("body") or "")[:300],
-            ))
-            if len(citations) >= 18:
-                break
-        if len(citations) >= 18:
-            break
+            raw_results.append({
+                "url": url,
+                "title": r.get("title", ""),
+                "snippet": (r.get("body") or "")[:300],
+            })
 
+    deduped = deduplicate_sources(raw_results)
+
+    citations = [
+        Citation(
+            title=d.get("title", ""),
+            url=d.get("url", ""),
+            snippet=d.get("snippet", "")[:300],
+        )
+        for d in deduped
+        if d.get("url")
+    ]
     return citations[:15]
 
 

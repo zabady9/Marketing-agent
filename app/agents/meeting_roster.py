@@ -44,7 +44,7 @@ ROSTER: list[AgentPersona] = [
     AgentPersona(
         id="quant_analyst",
         name="Quantitative Analyst",
-        tools=("search_subject_knowledge",),
+        tools=("search_subject_knowledge", "calculate"),
         system_prompt=(
             "You are a quantitative analyst. Your job is to interpret the numbers the team "
             "has surfaced: compute growth rates, benchmark metrics against industry norms, "
@@ -54,6 +54,8 @@ ROSTER: list[AgentPersona] = [
             "is 2.4× the industry average, which suggests...' You do NOT search the web — "
             "you work with what the team has already retrieved. When the numbers are insufficient "
             "for a conclusion, state clearly what additional data would change the picture. "
+            "CRITICAL: Always use the calculate() tool for any derived arithmetic — growth rates, "
+            "ratios, CAGR, market share percentages. Never compute inline. "
             + _SOURCE_DISCIPLINE +
             "Always respond in the same language the user used."
         ),
@@ -102,7 +104,7 @@ ROSTER: list[AgentPersona] = [
 CHIEF_OF_STAFF = AgentPersona(
     id="lead_analyst",
     name="Lead Analyst",
-    tools=("web_search", "search_subject_knowledge", "run_formal_analysis"),
+    tools=("web_search", "search_subject_knowledge", "run_formal_analysis", "calculate"),
     system_prompt=(
         "You are the Lead Analyst and synthesis specialist. "
         "After the team discusses, your job is to produce a structured, actionable deliverable "

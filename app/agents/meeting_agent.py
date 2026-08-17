@@ -36,7 +36,8 @@ from app.models.chat import MessageRole
 from app.models.consulting_analysis import ConsultingAnalysis
 from app.services import event_bus
 from app.services.chat import attach_visuals_to_message, save_message
-from app.services.visual_generator import generate_visuals
+from app.services.response_validator import validate_and_repair
+from app.services.visual_generator import generate_visuals, run_report_visualization_pass
 
 logger = logging.getLogger(__name__)
 
@@ -499,6 +500,7 @@ async def _run_focused_agent(
     tool_map: dict[str, Any],
     session_factory: async_sessionmaker,
     created_analysis_ids: list[str],
+    source_registry: Any | None = None,
 ) -> None:
     """One designated agent responds with a subset of tools. No bidding, no synthesis.
 
@@ -630,7 +632,12 @@ Never switch languages regardless of the language used in the subject profile or
         if intent in _VISUAL_INTENTS:
             try:
                 await event_bus.emit(session_id, {"type": "visuals_generating"})
-                tool_sources = _extract_tool_sources(messages)
+                # Prefer the source_registry bibliography over the old tool-message extraction
+                tool_sources = (
+                    [s.model_dump() for s in source_registry.to_list()]
+                    if source_registry and not source_registry.is_empty()
+                    else _extract_tool_sources(messages)
+                )
                 visual_response = await asyncio.wait_for(
                     generate_visuals(user_message, full_content, tool_sources, brand_profile),
                     timeout=30.0,
@@ -695,6 +702,68 @@ def _extract_tool_sources(messages: list) -> list[dict]:
 
 # ── routing constants ─────────────────────────────────────────────────────────
 
+_AUTO_SEARCH_INTENTS = frozenset({
+    "market_research", "competitive_analysis", "gap_analysis",
+    "strategic_recommendation", "subject_analysis", "general_analysis",
+    "trend_lookup", "data_insights", "quantitative_analysis",
+})
+
+
+async def _auto_preflight_search(
+    user_message: str,
+    brand_profile: dict,
+    tool_map: dict[str, Any],
+    intent: str,
+) -> str:
+    """Search subject knowledge (always) and the web (for analysis intents) before
+    any agent speaks, making data retrieval the default rather than optional.
+
+    For broad analytical intents, uses query_decomposer to generate 3-5 targeted
+    sub-queries instead of a single combined query, surfacing more evidence angles.
+    """
+    from app.agents.query_decomposer import decompose_query
+
+    parts = []
+
+    sk_fn = tool_map.get("search_subject_knowledge")
+    if sk_fn:
+        try:
+            result = await sk_fn.ainvoke({"query": user_message})
+            if result and "No relevant" not in result:
+                parts.append(f"## Subject Knowledge\n{result}")
+        except Exception as exc:
+            logger.warning("Pre-flight subject knowledge search failed: %s", exc)
+
+    if intent in _AUTO_SEARCH_INTENTS:
+        ws_fn = tool_map.get("web_search")
+        if ws_fn:
+            # Decompose broad queries into targeted sub-queries; fall back to single query
+            sub_queries = await decompose_query(user_message, intent, brand_profile)
+
+            if not sub_queries:
+                subject = (
+                    brand_profile.get("subject_name")
+                    or brand_profile.get("legal_name")
+                    or ""
+                )
+                industry = brand_profile.get("industry") or ""
+                sub_queries = [f"{subject} {industry} {user_message}"[:200]]
+
+            web_results: list[str] = []
+            for query in sub_queries:
+                try:
+                    result = await ws_fn.ainvoke({"query": query})
+                    if result and "unavailable" not in result.lower():
+                        web_results.append(result)
+                except Exception as exc:
+                    logger.warning("Pre-flight web search failed for %r: %s", query, exc)
+
+            if web_results:
+                parts.append("## Web Search Results\n" + "\n\n---\n\n".join(web_results))
+
+    return "\n\n".join(parts)
+
+
 _BYPASS_INTENTS = frozenset({
     "casual", "system_question", "followup_clarification", "out_of_scope",
 })
@@ -728,6 +797,20 @@ async def run_meeting_agent(
 ) -> None:
     """Background task. Orchestrates the full multi-agent meeting room."""
     try:
+        # ── Step 0: enrich retrieved_context with prior conversation turns ────
+        from app.services.context_retriever import retrieve_context as _retrieve_context
+        try:
+            async with session_factory() as _ctx_db:
+                prior_context = await _retrieve_context(session_id=session_id, db=_ctx_db, k=5)
+            if prior_context:
+                retrieved_context = (
+                    f"{prior_context}\n\n{retrieved_context}".strip()
+                    if retrieved_context
+                    else prior_context
+                )
+        except Exception as exc:
+            logger.warning("Context retrieval failed (non-fatal): %s", exc)
+
         # ── Step 1: classify intent and route ────────────────────────────────
         from app.agents.intent_agent import classify_analyst_intent
 
@@ -753,7 +836,16 @@ async def run_meeting_agent(
             return
 
         # Tools are needed for focused and full-meeting paths
-        all_tools, tool_map, created_analysis_ids = make_chat_tools(workspace_id, brand_profile, session_factory)
+        all_tools, tool_map, created_analysis_ids, source_registry = make_chat_tools(workspace_id, brand_profile, session_factory)
+
+        # ── Pre-flight: search for relevant data before any agent speaks ─────
+        preflight = await _auto_preflight_search(user_message, brand_profile, tool_map, intent)
+        if preflight:
+            retrieved_context = (
+                f"{retrieved_context}\n\n{preflight}".strip()
+                if retrieved_context
+                else preflight
+            )
 
         if intent in _FOCUSED_ROUTING:
             persona_id, allowed_tool_names = _FOCUSED_ROUTING[intent]
@@ -772,6 +864,7 @@ async def run_meeting_agent(
                 tool_map=tool_map,
                 session_factory=session_factory,
                 created_analysis_ids=created_analysis_ids,
+                source_registry=source_registry,
             )
             return
 
@@ -930,18 +1023,63 @@ async def run_meeting_agent(
                 created_analysis_ids.clear()
 
         await event_bus.emit(session_id, {"type": "synthesis_end"})
+
+        # ── Post-generation quality gate ──────────────────────────────────────
+        validated_synthesis, validation_warnings = await validate_and_repair(
+            synthesis=synthesis_content,
+            intent=intent,
+        )
+        if validated_synthesis != synthesis_content:
+            synthesis_content = validated_synthesis
+            # Update the persisted message if repair added content
+            if synthesis_msg_id:
+                async with session_factory() as db:
+                    from sqlalchemy import update as _upd
+                    from app.models.chat import ChatMessage
+                    await db.execute(
+                        _upd(ChatMessage)
+                        .where(ChatMessage.id == synthesis_msg_id)
+                        .values(content=synthesis_content)
+                    )
+                    await db.commit()
+        if validation_warnings:
+            logger.info("Validator warnings for session %s: %s", session_id, validation_warnings)
+
         await event_bus.emit(session_id, {"type": "done"})
 
         if intent in _VISUAL_INTENTS:
             try:
                 await event_bus.emit(session_id, {"type": "visuals_generating"})
-                visual_response = await asyncio.wait_for(
-                    generate_visuals(user_message, synthesis_content, [], brand_profile),
-                    timeout=30.0,
+                # Pass the full source registry accumulated across all agent turns
+                synthesis_sources = (
+                    [s.model_dump() for s in source_registry.to_list()]
+                    if source_registry and not source_registry.is_empty()
+                    else []
                 )
+                # Report-mode intents use the full dedup+placement pipeline
+                _REPORT_MODE_INTENTS = frozenset({
+                    "swot", "pestel", "feasibility", "general_analysis", "market_research",
+                })
+                if intent in _REPORT_MODE_INTENTS:
+                    visual_response = await asyncio.wait_for(
+                        run_report_visualization_pass(
+                            user_message, synthesis_content, synthesis_sources,
+                            brand_profile, intent,
+                        ),
+                        timeout=45.0,
+                    )
+                else:
+                    visual_response = await asyncio.wait_for(
+                        generate_visuals(user_message, synthesis_content, synthesis_sources, brand_profile),
+                        timeout=30.0,
+                    )
                 if visual_response.visuals:
                     visuals_data = [v.model_dump() for v in visual_response.visuals]
-                    sources_data = [s.model_dump() for s in visual_response.sources]
+                    # Prefer the source_registry bibliography over LLM-generated sources
+                    if source_registry and not source_registry.is_empty():
+                        sources_data = [s.model_dump() for s in source_registry.to_list()]
+                    else:
+                        sources_data = [s.model_dump() for s in visual_response.sources]
                     await event_bus.emit(session_id, {
                         "type": "visuals",
                         "visuals": visuals_data,
