@@ -62,15 +62,14 @@ dmypy.json
 # Nginx (generated from template via envsubst)
 nginx/nginx.conf
 
-# Alembic (generated files committed as-needed)
-# versions/ kept, but exclude auto-generated __pycache__
-
 # Logs
 *.log
 logs/
 
-# Node
+# Node / frontend
 frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
 
 # OS
 .DS_Store
