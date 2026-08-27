@@ -1,13 +1,13 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { InputForm, type FieldErrorInfo } from '../components/InputForm'
+import { WizardForm, type WizardFieldError } from '../components/wizard/WizardForm'
 import { createProject, FieldError } from '../api'
 import type { StartStudyRequest } from '../types'
 
 export function QuestionnairePage() {
   const navigate = useNavigate()
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [fieldError, setFieldError] = useState<FieldErrorInfo | null>(null)
+  const [fieldError, setFieldError] = useState<WizardFieldError | null>(null)
 
   async function handleSubmit(payload: StartStudyRequest) {
     setIsSubmitting(true)
@@ -17,8 +17,8 @@ export function QuestionnairePage() {
       navigate(`/projects/${projectId}`)
     } catch (err) {
       if (err instanceof FieldError) {
-        // Handled inline by InputForm via the fieldError prop — don't rethrow,
-        // or InputForm's own catch would also show a redundant generic error.
+        // Handled inline by WizardForm via the fieldError prop — don't rethrow,
+        // or WizardForm's own catch would also show a redundant generic error.
         setFieldError({ field: err.field, reason: err.message })
         return
       }
@@ -28,5 +28,5 @@ export function QuestionnairePage() {
     }
   }
 
-  return <InputForm onSubmit={handleSubmit} isSubmitting={isSubmitting} fieldError={fieldError} />
+  return <WizardForm onSubmit={handleSubmit} isSubmitting={isSubmitting} fieldError={fieldError} />
 }

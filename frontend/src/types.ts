@@ -20,13 +20,29 @@ export type AgentName =
 // ── API request ────────────────────────────────────────────────────────────────
 
 export interface StartStudyRequest {
-  raw_user_input: string
+  business_description: string
+  raw_user_input?: string
   output_language?: string
   analysis_horizon_years?: number
+  problem_statement?: string
+  unique_value_proposition?: string
+  target_market_description?: string
+  target_market_geography?: string
+  target_market_type?: string
+  business_model_type?: string
   pricing_unit_price?: number
   pricing_currency?: string
+  pricing_model?: string
+  expected_monthly_sales?: number
   capex_amount?: number
   opex_monthly_amount?: number
+  funding_source?: string
+  team_size?: number
+  key_roles_needed?: string[]
+  marketing_channels?: string[]
+  competitors?: string[]
+  founder_risks?: string
+  study_goal?: string
 }
 
 // ── Projects ───────────────────────────────────────────────────────────────────
@@ -80,11 +96,15 @@ export interface BusinessProfile {
   detected_language: string
   output_language: string
   business_description: SourcedValue<string>
+  problem_statement: SourcedValue<string>
+  unique_value_proposition: SourcedValue<string>
   target_market_description: SourcedValue<string>
   target_market_geography: SourcedValue<string>
+  target_market_type: SourcedValue<string>
   business_model_type: SourcedValue<string>
   capex: SourcedValue<number>
   capex_currency: string
+  funding_source: SourcedValue<string>
   opex_monthly: SourcedValue<number>
   opex_monthly_currency: string
   pricing_unit_price: SourcedValue<number>
@@ -92,7 +112,11 @@ export interface BusinessProfile {
   pricing_model: SourcedValue<string>
   expected_monthly_sales: SourcedValue<number | null>
   competitors: CompetitorEntry[]
+  founder_risks: SourcedValue<string>
   team_size: SourcedValue<number> | null
+  key_roles_needed: SourcedValue<string[]>
+  marketing_channels: SourcedValue<string[]>
+  study_goal: SourcedValue<string>
   analysis_horizon_years: number
   created_at: string
   updated_at: string

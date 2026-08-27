@@ -119,6 +119,16 @@ export function BusinessProfilePage() {
 
           <div className="grid grid-cols-2 gap-6">
             <Field
+              label="Problem being solved"
+              value={profile.problem_statement.value || '—'}
+              source={profile.problem_statement.source}
+            />
+            <Field
+              label="Unique value proposition"
+              value={profile.unique_value_proposition.value || '—'}
+              source={profile.unique_value_proposition.source}
+            />
+            <Field
               label="Target market"
               value={profile.target_market_description.value || '—'}
               source={profile.target_market_description.source}
@@ -129,6 +139,11 @@ export function BusinessProfilePage() {
               value={profile.target_market_geography.value || '—'}
               source={profile.target_market_geography.source}
               lowConfidence={profile.target_market_geography.low_confidence}
+            />
+            <Field
+              label="Target market type"
+              value={profile.target_market_type.value || '—'}
+              source={profile.target_market_type.source}
             />
             <Field
               label="Business model"
@@ -144,6 +159,12 @@ export function BusinessProfilePage() {
               source={profile.pricing_unit_price.source}
             />
             <Field
+              label="Expected monthly sales"
+              value={profile.expected_monthly_sales.value ?? '—'}
+              source={profile.expected_monthly_sales.source}
+              lowConfidence={profile.expected_monthly_sales.low_confidence}
+            />
+            <Field
               label="Capex"
               value={`${profile.capex.value} ${profile.capex_currency}`}
               source={profile.capex.source}
@@ -156,10 +177,9 @@ export function BusinessProfilePage() {
               lowConfidence={profile.opex_monthly.low_confidence}
             />
             <Field
-              label="Expected monthly sales"
-              value={profile.expected_monthly_sales.value ?? '—'}
-              source={profile.expected_monthly_sales.source}
-              lowConfidence={profile.expected_monthly_sales.low_confidence}
+              label="Funding source"
+              value={profile.funding_source.value || '—'}
+              source={profile.funding_source.source}
             />
             <Field
               label="Team size"
@@ -167,11 +187,18 @@ export function BusinessProfilePage() {
               source={profile.team_size?.source}
               lowConfidence={profile.team_size?.low_confidence}
             />
+            <Field
+              label="Study goal"
+              value={profile.study_goal.value || '—'}
+              source={profile.study_goal.source}
+            />
             <Field label="Analysis horizon" value={`${profile.analysis_horizon_years} years`} />
           </div>
 
           <div>
-            <p className="text-xs font-medium text-gray-500 mb-2">Competitors</p>
+            <div className="flex items-center gap-2 mb-2">
+              <p className="text-xs font-medium text-gray-500">Competitors</p>
+            </div>
             {profile.competitors.length === 0 ? (
               <p className="text-sm text-gray-400">None listed</p>
             ) : (
@@ -188,6 +215,54 @@ export function BusinessProfilePage() {
               </div>
             )}
           </div>
+
+          <div>
+            <div className="flex items-center gap-2 mb-2">
+              <p className="text-xs font-medium text-gray-500">Key roles needed</p>
+              <SourceBadge source={profile.key_roles_needed.source} />
+            </div>
+            {profile.key_roles_needed.value.length === 0 ? (
+              <p className="text-sm text-gray-400">None listed</p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {profile.key_roles_needed.value.map((role) => (
+                  <span
+                    key={role}
+                    className="inline-flex items-center rounded-full border border-gray-200 bg-gray-50 px-3 py-1 text-xs text-gray-700"
+                  >
+                    {role}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div>
+            <div className="flex items-center gap-2 mb-2">
+              <p className="text-xs font-medium text-gray-500">Sales / marketing channels</p>
+              <SourceBadge source={profile.marketing_channels.source} />
+            </div>
+            {profile.marketing_channels.value.length === 0 ? (
+              <p className="text-sm text-gray-400">None listed</p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {profile.marketing_channels.value.map((channel) => (
+                  <span
+                    key={channel}
+                    className="inline-flex items-center rounded-full border border-gray-200 bg-gray-50 px-3 py-1 text-xs text-gray-700"
+                  >
+                    {channel}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <Field
+            label="Founder-stated risks"
+            value={profile.founder_risks.value || 'None stated'}
+            source={profile.founder_risks.source}
+          />
         </div>
       </div>
     </div>
