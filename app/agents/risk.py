@@ -108,6 +108,7 @@ class RiskAssessmentAgent:
         geo = fi.target_market_geography.value or "global"
         biz = fi.business_description.value
         model_type = fi.business_model_type.value or "business"
+        founder_risks = fi.founder_risks.value or "none stated"
 
         # ── 1 regulatory/sector risk search ──────────────────────────────────
         reg_query = f"{model_type} startup regulatory compliance risks {geo} 2024 2025"
@@ -160,14 +161,17 @@ class RiskAssessmentAgent:
                             f"Write ALL text in language: {fi.output_language}.\n"
                             f"{ENGLISH_ONLY_TERMS_NOTE}\n"
                             "Consider: null SAM/SOM = market size uncertainty is itself a risk.\n"
-                            "Consider: negative ROI year 1 = financial runway risk."
+                            "Consider: negative ROI year 1 = financial runway risk.\n"
+                            "Consider: reflect credible founder-stated risks/concerns as their "
+                            "own risk entries rather than ignoring them."
                         )
                     ),
                     HumanMessage(
                         content=(
                             f"Business: {biz}\n"
                             f"Geography: {geo}  |  Model: {model_type}\n"
-                            f"Analysis horizon: {fi.analysis_horizon_years} years\n\n"
+                            f"Analysis horizon: {fi.analysis_horizon_years} years\n"
+                            f"Founder-stated risks/concerns: {founder_risks}\n\n"
                             f"=== Prior Analysis ===\n{prior_context}\n\n"
                             f"=== Regulatory Search Results ===\n{results_context}"
                         )

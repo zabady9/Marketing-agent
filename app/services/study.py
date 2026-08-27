@@ -29,6 +29,14 @@ def feasibility_input_from_business_profile(profile: BusinessProfile) -> Feasibi
             value=profile.business_description,
             source=Source(profile.business_description_source),
         ),
+        problem_statement=FieldWithSource(
+            value=profile.problem_statement,
+            source=Source(profile.problem_statement_source),
+        ),
+        unique_value_proposition=FieldWithSource(
+            value=profile.unique_value_proposition,
+            source=Source(profile.unique_value_proposition_source),
+        ),
         target_market_description=FieldWithSource(
             value=profile.target_market_description,
             source=Source(profile.target_market_description_source),
@@ -36,6 +44,10 @@ def feasibility_input_from_business_profile(profile: BusinessProfile) -> Feasibi
         target_market_geography=FieldWithSource(
             value=profile.target_market_geography,
             source=Source(profile.target_market_geography_source),
+        ),
+        target_market_type=FieldWithSource(
+            value=profile.target_market_type,
+            source=Source(profile.target_market_type_source),
         ),
         business_model_type=FieldWithSource(
             value=profile.business_model_type,
@@ -47,6 +59,10 @@ def feasibility_input_from_business_profile(profile: BusinessProfile) -> Feasibi
             low_confidence=profile.capex_low_confidence,
         ),
         capex_currency=profile.capex_currency,
+        funding_source=FieldWithSource(
+            value=profile.funding_source,
+            source=Source(profile.funding_source_source),
+        ),
         opex_monthly=FieldWithSource(
             value=profile.opex_monthly_amount,
             source=Source(profile.opex_monthly_source),
@@ -66,7 +82,23 @@ def feasibility_input_from_business_profile(profile: BusinessProfile) -> Feasibi
             low_confidence=profile.expected_monthly_sales_low_confidence,
         ),
         competitors=profile.competitors,
+        founder_risks=FieldWithSource(
+            value=profile.founder_risks,
+            source=Source(profile.founder_risks_source),
+        ),
         team_size=team_size,
+        key_roles_needed=FieldWithSource(
+            value=profile.key_roles_needed,
+            source=Source(profile.key_roles_needed_source),
+        ),
+        marketing_channels=FieldWithSource(
+            value=profile.marketing_channels,
+            source=Source(profile.marketing_channels_source),
+        ),
+        study_goal=FieldWithSource(
+            value=profile.study_goal,
+            source=Source(profile.study_goal_source),
+        ),
         analysis_horizon_years=profile.analysis_horizon_years,
     )
 

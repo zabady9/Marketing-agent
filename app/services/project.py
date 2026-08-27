@@ -14,15 +14,23 @@ from app.sse import EventQueue
 # should flip to "user_provided" when that field is edited by hand.
 _SOURCE_COLUMN_FOR: dict[str, str] = {
     "business_description": "business_description_source",
+    "problem_statement": "problem_statement_source",
+    "unique_value_proposition": "unique_value_proposition_source",
     "target_market_description": "target_market_description_source",
     "target_market_geography": "target_market_geography_source",
+    "target_market_type": "target_market_type_source",
     "business_model_type": "business_model_type_source",
     "capex_amount": "capex_source",
+    "funding_source": "funding_source_source",
     "opex_monthly_amount": "opex_monthly_source",
     "pricing_unit_price": "pricing_source",
     "pricing_model": "pricing_model_source",
     "expected_monthly_sales": "expected_monthly_sales_source",
+    "founder_risks": "founder_risks_source",
     "team_size": "team_size_source",
+    "key_roles_needed": "key_roles_needed_source",
+    "marketing_channels": "marketing_channels_source",
+    "study_goal": "study_goal_source",
 }
 
 # Maps a column to the *_low_confidence column that should clear to False when
@@ -52,10 +60,16 @@ def _business_profile_from_feasibility_input(input_: FeasibilityInput) -> Busine
         output_language=input_.output_language,
         business_description=input_.business_description.value,
         business_description_source=input_.business_description.source.value,
+        problem_statement=input_.problem_statement.value,
+        problem_statement_source=input_.problem_statement.source.value,
+        unique_value_proposition=input_.unique_value_proposition.value,
+        unique_value_proposition_source=input_.unique_value_proposition.source.value,
         target_market_description=input_.target_market_description.value,
         target_market_description_source=input_.target_market_description.source.value,
         target_market_geography=input_.target_market_geography.value,
         target_market_geography_source=input_.target_market_geography.source.value,
+        target_market_type=input_.target_market_type.value,
+        target_market_type_source=input_.target_market_type.source.value,
         business_model_type=input_.business_model_type.value,
         business_model_type_source=input_.business_model_type.source.value,
         capex_amount=input_.capex.value,
@@ -65,6 +79,8 @@ def _business_profile_from_feasibility_input(input_: FeasibilityInput) -> Busine
         capex_currency=input_.capex_currency or "USD",
         capex_source=input_.capex.source.value,
         capex_low_confidence=input_.capex.low_confidence,
+        funding_source=input_.funding_source.value,
+        funding_source_source=input_.funding_source.source.value,
         opex_monthly_amount=input_.opex_monthly.value,
         opex_monthly_currency=input_.opex_monthly_currency or "USD",
         opex_monthly_source=input_.opex_monthly.source.value,
@@ -78,8 +94,16 @@ def _business_profile_from_feasibility_input(input_: FeasibilityInput) -> Busine
         expected_monthly_sales_source=input_.expected_monthly_sales.source.value,
         expected_monthly_sales_low_confidence=input_.expected_monthly_sales.low_confidence,
         competitors=input_.competitors,
+        founder_risks=input_.founder_risks.value,
+        founder_risks_source=input_.founder_risks.source.value,
         team_size=team_size_value,
         team_size_source=team_size_source,
+        key_roles_needed=input_.key_roles_needed.value,
+        key_roles_needed_source=input_.key_roles_needed.source.value,
+        marketing_channels=input_.marketing_channels.value,
+        marketing_channels_source=input_.marketing_channels.source.value,
+        study_goal=input_.study_goal.value,
+        study_goal_source=input_.study_goal.source.value,
         analysis_horizon_years=input_.analysis_horizon_years,
     )
 
@@ -129,6 +153,13 @@ def business_profile_to_response(profile: BusinessProfile) -> BusinessProfileRes
         business_description=SourcedValue(
             value=profile.business_description, source=profile.business_description_source
         ),
+        problem_statement=SourcedValue(
+            value=profile.problem_statement, source=profile.problem_statement_source
+        ),
+        unique_value_proposition=SourcedValue(
+            value=profile.unique_value_proposition,
+            source=profile.unique_value_proposition_source,
+        ),
         target_market_description=SourcedValue(
             value=profile.target_market_description,
             source=profile.target_market_description_source,
@@ -136,6 +167,9 @@ def business_profile_to_response(profile: BusinessProfile) -> BusinessProfileRes
         target_market_geography=SourcedValue(
             value=profile.target_market_geography,
             source=profile.target_market_geography_source,
+        ),
+        target_market_type=SourcedValue(
+            value=profile.target_market_type, source=profile.target_market_type_source
         ),
         business_model_type=SourcedValue(
             value=profile.business_model_type, source=profile.business_model_type_source
@@ -146,6 +180,9 @@ def business_profile_to_response(profile: BusinessProfile) -> BusinessProfileRes
             low_confidence=profile.capex_low_confidence,
         ),
         capex_currency=profile.capex_currency,
+        funding_source=SourcedValue(
+            value=profile.funding_source, source=profile.funding_source_source
+        ),
         opex_monthly=SourcedValue(
             value=profile.opex_monthly_amount,
             source=profile.opex_monthly_source,
@@ -165,7 +202,19 @@ def business_profile_to_response(profile: BusinessProfile) -> BusinessProfileRes
             low_confidence=profile.expected_monthly_sales_low_confidence,
         ),
         competitors=profile.competitors,
+        founder_risks=SourcedValue(
+            value=profile.founder_risks, source=profile.founder_risks_source
+        ),
         team_size=team_size,
+        key_roles_needed=SourcedValue(
+            value=profile.key_roles_needed, source=profile.key_roles_needed_source
+        ),
+        marketing_channels=SourcedValue(
+            value=profile.marketing_channels, source=profile.marketing_channels_source
+        ),
+        study_goal=SourcedValue(
+            value=profile.study_goal, source=profile.study_goal_source
+        ),
         analysis_horizon_years=profile.analysis_horizon_years,
         created_at=profile.created_at,
         updated_at=profile.updated_at,
