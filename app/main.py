@@ -2,7 +2,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.routers.feasibility import router as feasibility_router
 from app.routers.projects import router as projects_router
 
 settings = get_settings()
@@ -22,7 +21,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(feasibility_router, prefix="/api")
 app.include_router(projects_router, prefix="/api")
 
 

@@ -6,15 +6,9 @@ from sse_starlette.sse import ServerSentEvent
 
 
 class SSEEvent(StrEnum):
-    # Pipeline lifecycle
-    STUDY_STARTED = "study_started"
-    STUDY_COMPLETED = "study_completed"
-    STUDY_FAILED = "study_failed"
-
     # Intake
     LANGUAGE_DETECTED = "language_detected"
     INTAKE_WARNING = "intake_warning"
-    INTAKE_ERROR = "intake_error"
 
     # Per-agent
     AGENT_STARTED = "agent_started"

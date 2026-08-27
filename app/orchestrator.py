@@ -8,38 +8,17 @@ logger = logging.getLogger(__name__)
 
 from app.agents.competitive import CompetitiveAnalysisAgent
 from app.agents.financial import FinancialCalcError, FinancialModelingAgent
-from app.agents.intake import IntakeFeasibilityAgent, IntakeHardBlockError
 from app.agents.market_sizing import MarketSizingAgent
 from app.agents.citation_qc import CitationValidationAgent
 from app.agents.risk import RiskAssessmentAgent
 from app.agents.synthesis import FeasibilitySynthesisAgent
-from app.schemas.intake import FeasibilityInput, FeasibilityStartRequest
+from app.schemas.intake import FeasibilityInput
 from app.schemas.market import CompetitiveAnalysisOutput, MarketSizingOutput
 from app.schemas.qc import CitationQCOutput
 from app.schemas.report import FinancialModelOutput
 from app.schemas.risk import RiskAssessmentOutput
 from app.schemas.synthesis import FeasibilitySynthesisOutput
 from app.sse import EventQueue, SSEEvent
-
-# In-memory study registry: study_id → EventQueue
-# The queue is created before the background task starts (no race condition).
-_studies: dict[str, EventQueue] = {}
-
-
-def register_study(study_id: str) -> EventQueue:
-    """Create and register a queue for a new study. Called from the router before
-    the background task starts, ensuring GET /stream never races with task setup."""
-    queue = EventQueue()
-    _studies[study_id] = queue
-    return queue
-
-
-def study_exists(study_id: str) -> bool:
-    return study_id in _studies
-
-
-def get_study_queue(study_id: str) -> EventQueue:
-    return _studies[study_id]
 
 
 def _market_overview_data(output: MarketSizingOutput) -> dict:
@@ -153,8 +132,8 @@ def _executive_summary_data(output: FeasibilitySynthesisOutput) -> dict:
 @dataclass
 class PipelineResult:
     """Everything phases 2-6 produce. `financial_error` set means the pipeline
-    hit the same fatal condition run_study always treated as STUDY_FAILED —
-    callers must check it before treating the result as usable."""
+    hit a fatal condition — callers must check it before treating the result
+    as usable."""
 
     market_output: MarketSizingOutput | None = None
     competitive_output: CompetitiveAnalysisOutput | None = None
@@ -208,10 +187,10 @@ async def run_feasibility_pipeline(
 ) -> PipelineResult:
     """Phases 2-6 of the pipeline: market sizing + competitive analysis (run
     concurrently), financial modeling, risk assessment, synthesis, and the
-    citation QC gate. Emits the same SSE events run_study always emitted for
-    these phases. Does NOT run intake (phase 1) — the caller supplies an
+    citation QC gate. Does NOT run intake (phase 1) — the caller supplies an
     already-built FeasibilityInput, whether freshly extracted from raw text
-    (see run_study) or reconstructed from a persisted BusinessProfile."""
+    or reconstructed from a persisted BusinessProfile (see
+    app/services/project.py and app/services/study.py)."""
     result = PipelineResult()
 
     # ── Phase 4: Market Sizing + Competitive Analysis (concurrent) ────────
@@ -365,89 +344,3 @@ async def run_feasibility_pipeline(
         )
 
     return result
-
-
-def build_study_completed_payload(
-    study_id: str,
-    feasibility_input: FeasibilityInput,
-    result: PipelineResult,
-) -> dict:
-    """Same STUDY_COMPLETED payload shape run_study always emitted, factored out
-    so project-scoped runs (app/services/study.py) can build an identical
-    summary without duplicating this shape."""
-    qc_output = result.qc_output
-    synthesis_output = result.synthesis_output
-    return {
-        "study_id": study_id,
-        "verdict": synthesis_output.verdict if synthesis_output else "unavailable",
-        "confidence_score": synthesis_output.confidence_score if synthesis_output else None,
-        "output_language": feasibility_input.output_language,
-        "fatal_agent_failures": result.fatal_agent_failures,
-        "qc_summary": {
-            "citation_support_rate": qc_output.citation_support_rate if qc_output else None,
-            "citation_threshold_passed": qc_output.citation_threshold_passed if qc_output else None,
-            # executive_summary_trusted=False → front-end must gate display behind
-            # a hard warning overlay; the section_ready text may contain fabrications.
-            "executive_summary_trusted": qc_output.executive_summary_trusted if qc_output else None,
-            "total_flags": qc_output.total_flags if qc_output else None,
-            "contradictions_in_scope": True,
-            "contradictions_verified": qc_output.contradictions_verified if qc_output else None,
-            "contradictions_faithful": qc_output.contradictions_faithful if qc_output else None,
-            "flagged_sections": qc_output.flagged_sections if qc_output else [],
-        } if qc_output else None,
-    }
-
-
-async def run_study(
-    study_id: str,
-    request: FeasibilityStartRequest,
-    queue: EventQueue,
-) -> None:
-    """Entry point for the standalone /api/feasibility/start flow (stateless,
-    no persistence): runs intake (phase 1) then the shared pipeline."""
-    try:
-        await queue.put(
-            SSEEvent.STUDY_STARTED,
-            {
-                "study_id": study_id,
-                "output_language": request.output_language or "auto-detect",
-                "analysis_horizon_years": request.analysis_horizon_years,
-            },
-        )
-
-        # ── Phase 1: Intake ────────────────────────────────────────────────────
-        try:
-            feasibility_input = await IntakeFeasibilityAgent().run(study_id, request, queue)
-        except IntakeHardBlockError as exc:
-            await queue.put(
-                SSEEvent.INTAKE_ERROR,
-                {"study_id": study_id, "field": exc.field, "reason": str(exc)},
-            )
-            await queue.put(
-                SSEEvent.STUDY_FAILED,
-                {"study_id": study_id, "reason": str(exc)},
-            )
-            return
-
-        result = await run_feasibility_pipeline(study_id, feasibility_input, queue)
-
-        if result.financial_error is not None:
-            await queue.put(
-                SSEEvent.STUDY_FAILED,
-                {"study_id": study_id, "reason": result.financial_error},
-            )
-            return
-
-        # ── Study complete ─────────────────────────────────────────────────────
-        await queue.put(
-            SSEEvent.STUDY_COMPLETED,
-            build_study_completed_payload(study_id, feasibility_input, result),
-        )
-
-    except Exception as exc:
-        await queue.put(
-            SSEEvent.STUDY_FAILED,
-            {"study_id": study_id, "reason": f"Unexpected error: {exc}"},
-        )
-    finally:
-        await queue.close()
