@@ -319,8 +319,8 @@ export function ChatPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
-      <div className="border-b border-gray-200 bg-white px-4 py-3 flex items-center justify-between">
+    <div className="h-screen bg-gray-50 flex flex-col overflow-hidden">
+      <div className="shrink-0 border-b border-gray-200 bg-white px-4 py-3 flex items-center justify-between">
         <Link
           to={`/projects/${projectId}`}
           className="text-sm text-gray-500 hover:text-gray-700"
@@ -333,7 +333,7 @@ export function ChatPage() {
         </Link>
       </div>
 
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 min-h-0 flex overflow-hidden">
         <aside className="w-56 shrink-0 border-r border-gray-200 bg-white overflow-y-auto px-3 py-4 hidden sm:block">
           <button
             onClick={handleNewChat}
@@ -360,8 +360,8 @@ export function ChatPage() {
           </ul>
         </aside>
 
-        <div className="flex-1 flex flex-col overflow-hidden">
-          <div className="flex-1 overflow-y-auto px-4 py-6">
+        <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+          <div className="flex-1 min-h-0 overflow-y-auto px-4 py-6">
             <div className="max-w-2xl mx-auto space-y-3">
               {loadingHistory && <p className="text-sm text-gray-400">Loading conversation…</p>}
               {historyError && (
@@ -401,7 +401,7 @@ export function ChatPage() {
             </div>
           </div>
 
-          <div className="border-t border-gray-200 bg-white px-4 py-4">
+          <div className="shrink-0 border-t border-gray-200 bg-white px-4 py-4">
             <div className="max-w-2xl mx-auto flex gap-2">
               <input
                 type="text"
