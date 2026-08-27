@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     langsmith_project: str = "feasibility-study"
 
     # Database
-    database_url: str = ""
+    database_url: str = "sqlite:///./app.db"
 
     # App
     app_env: str = "development"

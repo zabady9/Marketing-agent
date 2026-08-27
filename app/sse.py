@@ -39,6 +39,10 @@ class SSEEvent(StrEnum):
     QC_FLAG_RAISED = "qc_flag_raised"
     QC_COMPLETED = "qc_completed"
 
+    # Chat
+    CHAT_TOOL_ERROR = "chat_tool_error"
+    CHAT_MESSAGE_COMPLETED = "chat_message_completed"
+
 
 def make_event(event: SSEEvent, data: dict[str, Any]) -> ServerSentEvent:
     return ServerSentEvent(
