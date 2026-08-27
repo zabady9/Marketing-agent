@@ -29,6 +29,75 @@ export interface StartStudyRequest {
   opex_monthly_amount?: number
 }
 
+// ── Projects ───────────────────────────────────────────────────────────────────
+
+export interface ProjectSummary {
+  id: string
+  name: string
+  status: string
+  created_at: string
+}
+
+// ── Business profile ────────────────────────────────────────────────────────────
+
+export interface SourcedValue<T = unknown> {
+  value: T
+  source: 'user_provided' | 'estimated'
+  low_confidence: boolean
+}
+
+export interface CompetitorEntry {
+  name: string
+  source: 'user_provided' | 'estimated'
+}
+
+// ── Chat ─────────────────────────────────────────────────────────────────────────
+
+export type ChatRole = 'user' | 'assistant' | 'tool'
+
+export interface ChatMessageRecord {
+  id: string
+  role: ChatRole
+  content: string
+  tool_name: string | null
+  created_at: string
+}
+
+export interface ChatToolErrorPayload {
+  tool_name: string
+  error: string
+}
+
+export interface ChatMessageCompletedPayload {
+  message_id: string | null
+  role: ChatRole
+  content: string
+}
+
+export interface BusinessProfile {
+  project_id: string
+  raw_user_input: string
+  detected_language: string
+  output_language: string
+  business_description: SourcedValue<string>
+  target_market_description: SourcedValue<string>
+  target_market_geography: SourcedValue<string>
+  business_model_type: SourcedValue<string>
+  capex: SourcedValue<number>
+  capex_currency: string
+  opex_monthly: SourcedValue<number>
+  opex_monthly_currency: string
+  pricing_unit_price: SourcedValue<number>
+  pricing_currency: string
+  pricing_model: SourcedValue<string>
+  expected_monthly_sales: SourcedValue<number | null>
+  competitors: CompetitorEntry[]
+  team_size: SourcedValue<number> | null
+  analysis_horizon_years: number
+  created_at: string
+  updated_at: string
+}
+
 // ── Shared schema types ────────────────────────────────────────────────────────
 
 export interface Citation {
