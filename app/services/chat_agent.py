@@ -35,12 +35,15 @@ def _system_prompt(project: Project) -> str:
         f"study for their project, \"{project.name}\".\n\n"
         "Business profile on file:\n"
         f"- Description: {profile.business_description}\n"
+        f"- Problem: {profile.problem_statement or 'unknown'}\n"
+        f"- Unique value proposition: {profile.unique_value_proposition or 'unknown'}\n"
         f"- Target market: {profile.target_market_description or 'unknown'} "
         f"({profile.target_market_geography or 'geography unknown'})\n"
         f"- Business model: {profile.business_model_type or 'unknown'}\n"
         f"- Pricing: {profile.pricing_unit_price} {profile.pricing_currency} "
         f"({profile.pricing_model or 'model unspecified'})\n"
-        f"- Competitors: {', '.join(c['name'] for c in profile.competitors) or 'none listed'}\n\n"
+        f"- Competitors: {', '.join(c['name'] for c in profile.competitors) or 'none listed'}\n"
+        f"- Study goal: {profile.study_goal or 'unknown'}\n\n"
         "Use the run_feasibility_study tool when the user asks you to build, run, "
         "generate, or refresh the feasibility study (market sizing, competitive "
         "analysis, financial modeling, risk assessment, synthesis). Use the "
@@ -69,18 +72,26 @@ def _build_tools(db: Session, project: Project, queue: EventQueue) -> list:
     @tool
     def update_business_profile_tool(
         business_description: str | None = None,
+        problem_statement: str | None = None,
+        unique_value_proposition: str | None = None,
         target_market_description: str | None = None,
         target_market_geography: str | None = None,
+        target_market_type: str | None = None,
         business_model_type: str | None = None,
         capex_amount: float | None = None,
         capex_currency: str | None = None,
+        funding_source: str | None = None,
         opex_monthly_amount: float | None = None,
         opex_monthly_currency: str | None = None,
         pricing_unit_price: float | None = None,
         pricing_currency: str | None = None,
         pricing_model: str | None = None,
         expected_monthly_sales: float | None = None,
+        founder_risks: str | None = None,
         team_size: int | None = None,
+        key_roles_needed: list[str] | None = None,
+        marketing_channels: list[str] | None = None,
+        study_goal: str | None = None,
     ) -> str:
         """Update the project's business profile with new or corrected
         information the user reveals during the conversation. Only pass the
@@ -92,18 +103,26 @@ def _build_tools(db: Session, project: Project, queue: EventQueue) -> list:
         # NOT NULL columns with NULL. Filter to only the fields actually provided.
         provided = {
             "business_description": business_description,
+            "problem_statement": problem_statement,
+            "unique_value_proposition": unique_value_proposition,
             "target_market_description": target_market_description,
             "target_market_geography": target_market_geography,
+            "target_market_type": target_market_type,
             "business_model_type": business_model_type,
             "capex_amount": capex_amount,
             "capex_currency": capex_currency,
+            "funding_source": funding_source,
             "opex_monthly_amount": opex_monthly_amount,
             "opex_monthly_currency": opex_monthly_currency,
             "pricing_unit_price": pricing_unit_price,
             "pricing_currency": pricing_currency,
             "pricing_model": pricing_model,
             "expected_monthly_sales": expected_monthly_sales,
+            "founder_risks": founder_risks,
             "team_size": team_size,
+            "key_roles_needed": key_roles_needed,
+            "marketing_channels": marketing_channels,
+            "study_goal": study_goal,
         }
         non_null = {k: v for k, v in provided.items() if v is not None}
         if not non_null:
