@@ -31,11 +31,21 @@ class BusinessProfile(Base):
     business_description: Mapped[str] = mapped_column(Text, nullable=False)
     business_description_source: Mapped[str] = mapped_column(String(16), nullable=False)
 
+    problem_statement: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    problem_statement_source: Mapped[str] = mapped_column(String(16), nullable=False)
+
+    unique_value_proposition: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    unique_value_proposition_source: Mapped[str] = mapped_column(String(16), nullable=False)
+
     target_market_description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     target_market_description_source: Mapped[str] = mapped_column(String(16), nullable=False)
 
     target_market_geography: Mapped[str] = mapped_column(Text, nullable=False, default="")
     target_market_geography_source: Mapped[str] = mapped_column(String(16), nullable=False)
+
+    # Loose string ("B2C" | "B2B" | ""), consistent with business_model_type — no DB enum
+    target_market_type: Mapped[str] = mapped_column(String(16), nullable=False, default="")
+    target_market_type_source: Mapped[str] = mapped_column(String(16), nullable=False)
 
     business_model_type: Mapped[str] = mapped_column(Text, nullable=False, default="")
     business_model_type_source: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -44,6 +54,9 @@ class BusinessProfile(Base):
     capex_currency: Mapped[str] = mapped_column(String(8), nullable=False)
     capex_source: Mapped[str] = mapped_column(String(16), nullable=False)
     capex_low_confidence: Mapped[bool] = mapped_column(default=False)
+
+    funding_source: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    funding_source_source: Mapped[str] = mapped_column(String(16), nullable=False)
 
     opex_monthly_amount: Mapped[float] = mapped_column(Float, nullable=False)
     opex_monthly_currency: Mapped[str] = mapped_column(String(8), nullable=False)
@@ -64,8 +77,20 @@ class BusinessProfile(Base):
     # [{"name": str, "source": "user_provided" | "estimated"}, ...]
     competitors: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
 
+    founder_risks: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    founder_risks_source: Mapped[str] = mapped_column(String(16), nullable=False)
+
     team_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
     team_size_source: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+    key_roles_needed: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    key_roles_needed_source: Mapped[str] = mapped_column(String(16), nullable=False)
+
+    marketing_channels: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    marketing_channels_source: Mapped[str] = mapped_column(String(16), nullable=False)
+
+    study_goal: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    study_goal_source: Mapped[str] = mapped_column(String(16), nullable=False)
 
     analysis_horizon_years: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
 
