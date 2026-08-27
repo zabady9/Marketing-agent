@@ -8,8 +8,10 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.models import ChatMessage, ChatSession, Project
+from app.models import ChatMessage, ChatSession, MemoryEntry, Project
 from app.schemas.project import BusinessProfileUpdate
+from app.services.chat import maybe_set_title
+from app.services.memory import add_memory_entry, list_memory_entries
 from app.services.project import update_business_profile
 from app.services.study import run_feasibility_study
 from app.sse import EventQueue, SSEEvent
@@ -28,8 +30,14 @@ _FALLBACK_MESSAGE = (
 )
 
 
-def _system_prompt(project: Project) -> str:
+def _system_prompt(project: Project, memory_entries: list[MemoryEntry]) -> str:
     profile = project.business_profile
+    memory_section = (
+        "\n\nWhat you remember about this user across all projects:\n"
+        + "\n".join(f"- {m.content}" for m in memory_entries)
+        if memory_entries
+        else ""
+    )
     return (
         "You are a business analyst assistant helping the user develop a feasibility "
         f"study for their project, \"{project.name}\".\n\n"
@@ -48,8 +56,15 @@ def _system_prompt(project: Project) -> str:
         "generate, or refresh the feasibility study (market sizing, competitive "
         "analysis, financial modeling, risk assessment, synthesis). Use the "
         "update_business_profile tool when the user reveals new or corrected "
-        "information about the business that should be saved. Keep replies "
-        "concise and focused on helping the user reason about this business idea."
+        "information about the business that should be saved. Use the "
+        "remember_fact_tool when the user states a durable preference or fact "
+        "about themselves or their business that would be useful in *future* "
+        "conversations and other projects (not just this one) — e.g. their name, "
+        "role, industry background, or a stated preference for how you should "
+        "respond. Do not use it for facts that only matter to this project's "
+        "business profile; use update_business_profile for those instead. Keep "
+        "replies concise and focused on helping the user reason about this "
+        "business idea." + memory_section
     )
 
 
@@ -131,7 +146,18 @@ def _build_tools(db: Session, project: Project, queue: EventQueue) -> list:
         update_business_profile(db, project.business_profile, patch)
         return "Business profile updated."
 
-    return [run_feasibility_study_tool, update_business_profile_tool]
+    @tool
+    def remember_fact_tool(content: str) -> str:
+        """Persist a short, durable fact or preference about the user or their
+        business that should be remembered in ALL future conversations across
+        ALL projects (not just this one) — e.g. "prefers metric units", "is
+        based in Cairo", "runs a family business with 2 co-founders". Do not
+        call this for facts that only apply to the current project's business
+        profile — use update_business_profile for those instead."""
+        add_memory_entry(db, content, source="agent_extracted")
+        return "Noted — I'll remember that."
+
+    return [run_feasibility_study_tool, update_business_profile_tool, remember_fact_tool]
 
 
 def _load_history_messages(session: ChatSession) -> list:
@@ -191,13 +217,15 @@ async def run_chat_turn(
     tool result rather than crashing the turn."""
     user_message = ChatMessage(role="user", content=user_content)
     session.messages.append(user_message)
+    maybe_set_title(session, user_content)
     db.commit()
 
     tools = _build_tools(db, project, queue)
     tool_by_name = {t.name: t for t in tools}
     llm = _build_llm().bind_tools(tools)
 
-    history: list = [SystemMessage(content=_system_prompt(project))]
+    memory_entries = list_memory_entries(db)
+    history: list = [SystemMessage(content=_system_prompt(project, memory_entries))]
     history.extend(_load_history_messages(session))
 
     for round_num in range(MAX_TOOL_ROUNDS):

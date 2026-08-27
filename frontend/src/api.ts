@@ -1,6 +1,8 @@
 import type {
   BusinessProfile,
   ChatMessageRecord,
+  ChatSessionRecord,
+  MemoryEntry,
   ProjectSummary,
   StartStudyRequest,
 } from './types'
@@ -64,12 +66,58 @@ export async function createProject(payload: StartStudyRequest): Promise<string>
   return data.project_id
 }
 
-export async function listChatMessages(projectId: string): Promise<ChatMessageRecord[]> {
-  const res = await fetch(`${BASE}/api/projects/${projectId}/chat/messages`)
+export async function listChatSessions(projectId: string): Promise<ChatSessionRecord[]> {
+  const res = await fetch(`${BASE}/api/projects/${projectId}/chat/sessions`)
+  if (!res.ok) {
+    throw new Error(await errorMessageFor(res))
+  }
+  return (await res.json()) as ChatSessionRecord[]
+}
+
+export async function createChatSession(projectId: string): Promise<ChatSessionRecord> {
+  const res = await fetch(`${BASE}/api/projects/${projectId}/chat/sessions`, { method: 'POST' })
+  if (!res.ok) {
+    throw new Error(await errorMessageFor(res))
+  }
+  return (await res.json()) as ChatSessionRecord
+}
+
+export async function listChatMessages(
+  projectId: string,
+  sessionId: string,
+): Promise<ChatMessageRecord[]> {
+  const res = await fetch(`${BASE}/api/projects/${projectId}/chat/sessions/${sessionId}/messages`)
   if (!res.ok) {
     throw new Error(await errorMessageFor(res))
   }
   return (await res.json()) as ChatMessageRecord[]
+}
+
+export async function listMemory(): Promise<MemoryEntry[]> {
+  const res = await fetch(`${BASE}/api/memory`)
+  if (!res.ok) {
+    throw new Error(await errorMessageFor(res))
+  }
+  return (await res.json()) as MemoryEntry[]
+}
+
+export async function addMemoryEntry(content: string): Promise<MemoryEntry> {
+  const res = await fetch(`${BASE}/api/memory`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+  })
+  if (!res.ok) {
+    throw new Error(await errorMessageFor(res))
+  }
+  return (await res.json()) as MemoryEntry
+}
+
+export async function deleteMemoryEntry(memoryId: string): Promise<void> {
+  const res = await fetch(`${BASE}/api/memory/${memoryId}`, { method: 'DELETE' })
+  if (!res.ok) {
+    throw new Error(await errorMessageFor(res))
+  }
 }
 
 export interface ChatSSEEvent {
@@ -82,13 +130,17 @@ export interface ChatSSEEvent {
 // and parses the standard SSE "event: ...\ndata: ...\n\n" framing by hand.
 export async function* streamChatMessage(
   projectId: string,
+  sessionId: string,
   content: string,
 ): AsyncGenerator<ChatSSEEvent> {
-  const res = await fetch(`${BASE}/api/projects/${projectId}/chat/messages`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content }),
-  })
+  const res = await fetch(
+    `${BASE}/api/projects/${projectId}/chat/sessions/${sessionId}/messages`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    },
+  )
   if (!res.ok || !res.body) {
     throw new Error(await errorMessageFor(res))
   }

@@ -79,6 +79,22 @@ export interface ChatMessageRecord {
   created_at: string
 }
 
+export interface ChatSessionRecord {
+  id: string
+  project_id: string
+  title: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface MemoryEntry {
+  id: string
+  content: string
+  source: 'agent_extracted' | 'user_added'
+  created_at: string
+  updated_at: string
+}
+
 export interface ChatToolErrorPayload {
   tool_name: string
   error: string

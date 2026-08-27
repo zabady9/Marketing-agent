@@ -10,7 +10,7 @@ from sse_starlette.sse import EventSourceResponse
 from app.agents.intake import IntakeHardBlockError
 from app.db import get_db
 from app.models import ChatMessage
-from app.schemas.chat import ChatMessageCreate, ChatMessageResponse
+from app.schemas.chat import ChatMessageCreate, ChatMessageResponse, ChatSessionResponse
 from app.schemas.intake import FeasibilityStartRequest
 from app.schemas.project import (
     BusinessProfileResponse,
@@ -20,7 +20,7 @@ from app.schemas.project import (
     ProjectSummary,
 )
 from app.schemas.study import StudyResultResponse
-from app.services.chat import get_or_create_chat_session
+from app.services.chat import create_chat_session, get_chat_session, list_chat_sessions
 from app.services.chat_agent import run_chat_turn
 from app.services.project import (
     business_profile_to_response,
@@ -98,26 +98,53 @@ def get_study_endpoint(project_id: str, db: Session = Depends(get_db)) -> StudyR
     return StudyResultResponse.model_validate(project.study_result)
 
 
-@router.get("/{project_id}/chat/messages", response_model=list[ChatMessageResponse])
-def list_chat_messages_endpoint(
+@router.get("/{project_id}/chat/sessions", response_model=list[ChatSessionResponse])
+def list_chat_sessions_endpoint(
     project_id: str, db: Session = Depends(get_db)
+) -> list[ChatSessionResponse]:
+    project = get_project(db, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return list_chat_sessions(db, project)
+
+
+@router.post("/{project_id}/chat/sessions", response_model=ChatSessionResponse, status_code=201)
+def create_chat_session_endpoint(
+    project_id: str, db: Session = Depends(get_db)
+) -> ChatSessionResponse:
+    project = get_project(db, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return create_chat_session(db, project)
+
+
+@router.get(
+    "/{project_id}/chat/sessions/{session_id}/messages",
+    response_model=list[ChatMessageResponse],
+)
+def list_chat_messages_endpoint(
+    project_id: str, session_id: str, db: Session = Depends(get_db)
 ) -> list[ChatMessageResponse]:
     project = get_project(db, project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
-    session = get_or_create_chat_session(db, project)
+    session = get_chat_session(db, project, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Chat session not found")
     return list(session.messages)
 
 
-@router.post("/{project_id}/chat/messages")
+@router.post("/{project_id}/chat/sessions/{session_id}/messages")
 async def post_chat_message_endpoint(
-    project_id: str, payload: ChatMessageCreate, db: Session = Depends(get_db)
+    project_id: str, session_id: str, payload: ChatMessageCreate, db: Session = Depends(get_db)
 ) -> EventSourceResponse:
     project = get_project(db, project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    session = get_or_create_chat_session(db, project)
+    session = get_chat_session(db, project, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Chat session not found")
     queue = EventQueue()
 
     async def _run() -> None:

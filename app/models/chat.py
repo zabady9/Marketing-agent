@@ -19,6 +19,9 @@ class ChatSession(Base):
     project_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
     )
+    # Derived server-side from the session's first user message once it's sent
+    # (see app.services.chat.maybe_set_title) — null until then.
+    title: Mapped[str | None] = mapped_column(String(200), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )

@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
-import { listChatMessages, streamChatMessage } from '../api'
+import { Link, useNavigate, useParams } from 'react-router-dom'
+import { createChatSession, listChatMessages, listChatSessions, streamChatMessage } from '../api'
 import type {
   ChatMessageCompletedPayload,
   ChatMessageRecord,
   ChatRole,
+  ChatSessionRecord,
   ChatToolErrorPayload,
   CompetitiveLandscapeData,
   ExecutiveSummaryData,
@@ -198,7 +199,9 @@ function ToolErrorBubble({ toolName, error }: { toolName: string; error: string 
 }
 
 export function ChatPage() {
-  const { projectId } = useParams<{ projectId: string }>()
+  const { projectId, sessionId } = useParams<{ projectId: string; sessionId: string }>()
+  const navigate = useNavigate()
+  const [sessions, setSessions] = useState<ChatSessionRecord[]>([])
   const [transcript, setTranscript] = useState<TranscriptItem[]>([])
   const [loadingHistory, setLoadingHistory] = useState(true)
   const [historyError, setHistoryError] = useState<string | null>(null)
@@ -211,7 +214,26 @@ export function ChatPage() {
   useEffect(() => {
     if (!projectId) return
     let cancelled = false
-    listChatMessages(projectId)
+    listChatSessions(projectId)
+      .then((data) => {
+        if (cancelled) return
+        setSessions(data)
+      })
+      .catch(() => {
+        // Sidebar is a convenience — a failed fetch here shouldn't block the
+        // main transcript from loading, so errors are swallowed.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [projectId])
+
+  useEffect(() => {
+    if (!projectId || !sessionId) return
+    let cancelled = false
+    setLoadingHistory(true)
+    setHistoryError(null)
+    listChatMessages(projectId, sessionId)
       .then((messages) => {
         if (cancelled) return
         setTranscript(historyToTranscript(messages))
@@ -225,15 +247,23 @@ export function ChatPage() {
     return () => {
       cancelled = true
     }
-  }, [projectId])
+  }, [projectId, sessionId])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [transcript, progressLabel])
 
+  async function handleNewChat() {
+    if (!projectId) return
+    const session = await createChatSession(projectId)
+    setSessions((prev) => [session, ...prev])
+    navigate(`/projects/${projectId}/chat/${session.id}`)
+  }
+
   async function handleSend() {
-    if (!projectId || !input.trim() || isSending) return
+    if (!projectId || !sessionId || !input.trim() || isSending) return
     const content = input.trim()
+    const wasFirstMessage = !transcript.some((item) => item.kind === 'message' && item.role === 'user')
     setInput('')
     setSendError(null)
     setTranscript((prev) => [
@@ -243,7 +273,7 @@ export function ChatPage() {
     setIsSending(true)
 
     try {
-      for await (const evt of streamChatMessage(projectId, content)) {
+      for await (const evt of streamChatMessage(projectId, sessionId, content)) {
         if (evt.event === 'chat_tool_error') {
           const payload = evt.data as ChatToolErrorPayload
           setTranscript((prev) => [
@@ -282,6 +312,9 @@ export function ChatPage() {
     } finally {
       setIsSending(false)
       setProgressLabel(null)
+      if (wasFirstMessage && projectId) {
+        listChatSessions(projectId).then(setSessions).catch(() => {})
+      }
     }
   }
 
@@ -295,71 +328,104 @@ export function ChatPage() {
           ← Business profile
         </Link>
         <p className="text-sm font-medium text-gray-700">Chat</p>
+        <Link to="/memory" className="text-sm text-gray-500 hover:text-gray-700">
+          Manage memory
+        </Link>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-4 py-6">
-        <div className="max-w-2xl mx-auto space-y-3">
-          {loadingHistory && <p className="text-sm text-gray-400">Loading conversation…</p>}
-          {historyError && (
-            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-              {historyError}
-            </div>
-          )}
-          {!loadingHistory && !historyError && transcript.length === 0 && (
-            <p className="text-sm text-gray-400">
-              No messages yet. Ask the assistant to build a feasibility study for this project.
-            </p>
-          )}
-          {transcript.map((item, i) => {
-            if (item.kind === 'message') return <MessageBubble key={i} item={item} />
-            if (item.kind === 'tool_error') {
-              return <ToolErrorBubble key={i} toolName={item.toolName} error={item.error} />
-            }
-            return (
-              <div key={i} className="flex justify-start">
-                <SectionCard section={item.section} data={item.data} />
-              </div>
-            )
-          })}
-          {progressLabel && (
-            <div className="flex justify-start">
-              <div className="max-w-md rounded-lg bg-gray-50 border border-gray-200 px-3 py-1.5 text-xs text-gray-500 italic">
-                {progressLabel}
-              </div>
-            </div>
-          )}
-          {sendError && (
-            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-              {sendError}
-            </div>
-          )}
-          <div ref={bottomRef} />
-        </div>
-      </div>
-
-      <div className="border-t border-gray-200 bg-white px-4 py-4">
-        <div className="max-w-2xl mx-auto flex gap-2">
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault()
-                handleSend()
-              }
-            }}
-            placeholder="Ask the assistant about this project…"
-            disabled={isSending}
-            className="flex-1 rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none disabled:opacity-50"
-          />
+      <div className="flex-1 flex overflow-hidden">
+        <aside className="w-56 shrink-0 border-r border-gray-200 bg-white overflow-y-auto px-3 py-4 hidden sm:block">
           <button
-            onClick={handleSend}
-            disabled={isSending || !input.trim()}
-            className="rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            onClick={handleNewChat}
+            className="w-full mb-3 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-700 transition-colors"
           >
-            {isSending ? 'Sending…' : 'Send'}
+            + New chat
           </button>
+          <ul className="space-y-1">
+            {sessions.map((s) => (
+              <li key={s.id}>
+                <Link
+                  to={`/projects/${projectId}/chat/${s.id}`}
+                  className={`block rounded-md px-2.5 py-2 text-xs truncate transition-colors ${
+                    s.id === sessionId
+                      ? 'bg-indigo-50 border border-indigo-300 text-indigo-900'
+                      : 'border border-transparent text-gray-600 hover:bg-gray-50'
+                  }`}
+                  title={s.title ?? 'New chat'}
+                >
+                  {s.title ?? 'New chat'}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </aside>
+
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <div className="flex-1 overflow-y-auto px-4 py-6">
+            <div className="max-w-2xl mx-auto space-y-3">
+              {loadingHistory && <p className="text-sm text-gray-400">Loading conversation…</p>}
+              {historyError && (
+                <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  {historyError}
+                </div>
+              )}
+              {!loadingHistory && !historyError && transcript.length === 0 && (
+                <p className="text-sm text-gray-400">
+                  No messages yet. Ask the assistant to build a feasibility study for this project.
+                </p>
+              )}
+              {transcript.map((item, i) => {
+                if (item.kind === 'message') return <MessageBubble key={i} item={item} />
+                if (item.kind === 'tool_error') {
+                  return <ToolErrorBubble key={i} toolName={item.toolName} error={item.error} />
+                }
+                return (
+                  <div key={i} className="flex justify-start">
+                    <SectionCard section={item.section} data={item.data} />
+                  </div>
+                )
+              })}
+              {progressLabel && (
+                <div className="flex justify-start">
+                  <div className="max-w-md rounded-lg bg-gray-50 border border-gray-200 px-3 py-1.5 text-xs text-gray-500 italic">
+                    {progressLabel}
+                  </div>
+                </div>
+              )}
+              {sendError && (
+                <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  {sendError}
+                </div>
+              )}
+              <div ref={bottomRef} />
+            </div>
+          </div>
+
+          <div className="border-t border-gray-200 bg-white px-4 py-4">
+            <div className="max-w-2xl mx-auto flex gap-2">
+              <input
+                type="text"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault()
+                    handleSend()
+                  }
+                }}
+                placeholder="Ask the assistant about this project…"
+                disabled={isSending}
+                className="flex-1 rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none disabled:opacity-50"
+              />
+              <button
+                onClick={handleSend}
+                disabled={isSending || !input.trim()}
+                className="rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {isSending ? 'Sending…' : 'Send'}
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>

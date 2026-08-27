@@ -5,25 +5,15 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class ChatMessageCreate(BaseModel):
+class MemoryEntryCreate(BaseModel):
     content: str = Field(..., min_length=1)
 
 
-class ChatMessageResponse(BaseModel):
+class MemoryEntryResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
-    role: str
     content: str
-    tool_name: str | None
-    created_at: datetime
-
-
-class ChatSessionResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: str
-    project_id: str
-    title: str | None
+    source: str
     created_at: datetime
     updated_at: datetime
