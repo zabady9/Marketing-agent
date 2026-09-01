@@ -1,8 +1,17 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { createChatSession, listChatMessages, listChatSessions, streamChatMessage } from '../api'
+import { SectionCardShell, Stat } from '../components/report/primitives'
+import { GlossaryProvider } from '../components/report/GlossaryContext'
+import { RiskMatrix } from '../components/report/RiskMatrix'
+import { TamSamSomChart } from '../components/report/charts/TamSamSomChart'
+import { CompetitorPositionChart } from '../components/report/charts/CompetitorPositionChart'
+import { SensitivityCharts } from '../components/report/charts/SensitivityCharts'
+import { CashFlowChart } from '../components/report/charts/CashFlowChart'
+import { ConfidenceMeter } from '../components/report/charts/ConfidenceMeter'
 import type {
   ChatMessageCompletedPayload,
+  ChatMessageDeltaPayload,
   ChatMessageRecord,
   ChatRole,
   ChatSessionRecord,
@@ -15,18 +24,29 @@ import type {
 } from '../types'
 
 type TranscriptItem =
-  | { kind: 'message'; id: string; role: ChatRole; content: string; toolName?: string | null }
+  | {
+      kind: 'message'
+      id: string
+      role: ChatRole
+      content: string
+      toolName?: string | null
+      streaming?: boolean
+    }
   | { kind: 'tool_error'; toolName: string; error: string }
-  | { kind: 'section'; section: string; data: unknown }
+  | { kind: 'section'; section: string; data: unknown; studyId?: string }
 
 function historyToTranscript(messages: ChatMessageRecord[]): TranscriptItem[] {
-  return messages.map((m) => ({
-    kind: 'message',
-    id: m.id,
-    role: m.role,
-    content: m.content,
-    toolName: m.tool_name,
-  }))
+  // Every successful study run now has its own permanent, independently
+  // viewable StudyResult row, so every one gets its own report-link card —
+  // each correctly linked to the specific run it came from via study_id.
+  const items: TranscriptItem[] = []
+  messages.forEach((m) => {
+    items.push({ kind: 'message', id: m.id, role: m.role, content: m.content, toolName: m.tool_name })
+    if (m.role === 'tool' && m.tool_name === 'run_feasibility_study_tool' && m.study_id) {
+      items.push({ kind: 'section', section: 'report_link', data: null, studyId: m.study_id })
+    }
+  })
+  return items
 }
 
 function fmt(n: number | null | undefined): string {
@@ -34,17 +54,36 @@ function fmt(n: number | null | undefined): string {
   return n.toLocaleString(undefined, { maximumFractionDigits: 1 })
 }
 
-function SectionCard({ section, data }: { section: string; data: unknown }) {
+function ViewFullReportLink({ projectId, studyId }: { projectId?: string; studyId?: string }) {
+  if (!projectId || !studyId) return null
+  return (
+    <Link
+      to={`/projects/${projectId}/studies/${studyId}`}
+      className="mt-2 inline-block text-xs font-medium text-indigo-600 hover:text-indigo-700 hover:underline"
+    >
+      View full report →
+    </Link>
+  )
+}
+
+function SectionCard({
+  section,
+  data,
+  projectId,
+  studyId,
+}: {
+  section: string
+  data: unknown
+  projectId?: string
+  studyId?: string
+}) {
   if (section === 'market_overview') {
     const d = data as MarketOverviewData
     return (
       <SectionCardShell title="Market Overview">
-        <div className="grid grid-cols-3 gap-3 text-center">
-          <Stat label="TAM" value={fmt(d.tam.value)} unit={d.tam.currency} />
-          <Stat label="SAM" value={fmt(d.sam.value)} unit={d.sam.currency} />
-          <Stat label="SOM" value={fmt(d.som.value)} unit={d.som.currency} />
-        </div>
+        <TamSamSomChart tam={d.tam} sam={d.sam} som={d.som} growthRateCagr={d.growth_rate_cagr} compact />
         {d.narrative?.text && <p className="mt-3 text-xs text-gray-600">{d.narrative.text}</p>}
+        <ViewFullReportLink projectId={projectId} studyId={studyId} />
       </SectionCardShell>
     )
   }
@@ -57,6 +96,11 @@ function SectionCard({ section, data }: { section: string; data: unknown }) {
           {d.competitors.length} competitor{d.competitors.length === 1 ? '' : 's'} analyzed
           {d.competitors.length > 0 && ': ' + d.competitors.map((c) => c.name).join(', ')}
         </p>
+        {d.competitors.length > 0 && (
+          <div className="mt-2">
+            <CompetitorPositionChart competitors={d.competitors} compact />
+          </div>
+        )}
         {d.key_differentiators.length > 0 && (
           <ul className="mt-2 list-disc list-inside text-xs text-gray-600 space-y-0.5">
             {d.key_differentiators.slice(0, 3).map((diff, i) => (
@@ -64,23 +108,33 @@ function SectionCard({ section, data }: { section: string; data: unknown }) {
             ))}
           </ul>
         )}
+        <ViewFullReportLink projectId={projectId} studyId={studyId} />
       </SectionCardShell>
     )
   }
 
   if (section === 'financial_feasibility') {
     const d = data as FinancialFeasibilityData
+    const currency = d.capex.currency || d.opex_monthly.currency || 'USD'
     return (
       <SectionCardShell title="Financial Feasibility">
         <div className="grid grid-cols-3 gap-3 text-center">
-          <Stat label="Break-even" value={fmt(d.break_even_months.value)} unit="months" />
-          <Stat label="ROI Year 1" value={fmt(d.roi_year_1.value)} unit="%" />
+          <Stat label="Break-even" term="Break-even" value={fmt(d.break_even_months.value)} unit="months" />
+          <Stat label="ROI Year 1" term="ROI" value={fmt(d.roi_year_1.value)} unit="%" />
           <Stat
             label="NPV"
+            term="NPV"
             value={fmt(d.npv.value)}
             unit={d.npv.is_positive ? 'positive' : 'negative'}
           />
         </div>
+        <div className="mt-2">
+          <SensitivityCharts scenarios={d.sensitivity_analysis.value} currency={currency} compact />
+        </div>
+        <div className="mt-2">
+          <CashFlowChart cashFlow={d.cash_flow} currency={currency} compact />
+        </div>
+        <ViewFullReportLink projectId={projectId} studyId={studyId} />
       </SectionCardShell>
     )
   }
@@ -94,12 +148,18 @@ function SectionCard({ section, data }: { section: string; data: unknown }) {
           identified out of {d.risks.length} total.
         </p>
         {d.risks.length > 0 && (
+          <div className="mt-2">
+            <RiskMatrix risks={d.risks} compact />
+          </div>
+        )}
+        {d.risks.length > 0 && (
           <ul className="mt-2 list-disc list-inside text-xs text-gray-600 space-y-0.5">
             {d.risks.slice(0, 3).map((r, i) => (
               <li key={i}>{r.risk_description}</li>
             ))}
           </ul>
         )}
+        <ViewFullReportLink projectId={projectId} studyId={studyId} />
       </SectionCardShell>
     )
   }
@@ -109,9 +169,11 @@ function SectionCard({ section, data }: { section: string; data: unknown }) {
     return (
       <SectionCardShell title="Executive Summary">
         <p className="text-sm font-semibold text-gray-900">
-          Verdict: <span className="uppercase">{d.verdict.replace(/_/g, ' ')}</span> · confidence{' '}
-          {Math.round(d.confidence_score * 100)}%
+          Verdict: <span className="uppercase">{d.verdict.replace(/_/g, ' ')}</span>
         </p>
+        <div className="mt-1">
+          <ConfidenceMeter confidenceScore={d.confidence_score} breakdown={d.confidence_breakdown} compact />
+        </div>
         {d.key_opportunities.length > 0 && (
           <div className="mt-2">
             <p className="text-xs font-medium text-gray-500">Opportunities</p>
@@ -132,32 +194,21 @@ function SectionCard({ section, data }: { section: string; data: unknown }) {
             </ul>
           </div>
         )}
+        <ViewFullReportLink projectId={projectId} studyId={studyId} />
+      </SectionCardShell>
+    )
+  }
+
+  if (section === 'report_link') {
+    return (
+      <SectionCardShell title="Feasibility Study">
+        <p className="text-xs text-gray-600">A feasibility study was generated for this project.</p>
+        <ViewFullReportLink projectId={projectId} studyId={studyId} />
       </SectionCardShell>
     )
   }
 
   return null
-}
-
-function SectionCardShell({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="rounded-lg border border-indigo-200 bg-indigo-50/50 px-4 py-3 max-w-md">
-      <p className="text-xs font-semibold text-indigo-700 mb-2">{title}</p>
-      {children}
-    </div>
-  )
-}
-
-function Stat({ label, value, unit }: { label: string; value: string; unit?: string }) {
-  return (
-    <div>
-      <p className="text-sm font-semibold text-gray-900">{value}</p>
-      <p className="text-[10px] text-gray-500">
-        {label}
-        {unit ? ` (${unit})` : ''}
-      </p>
-    </div>
-  )
 }
 
 function MessageBubble({ item }: { item: TranscriptItem & { kind: 'message' } }) {
@@ -210,6 +261,24 @@ export function ChatPage() {
   const [progressLabel, setProgressLabel] = useState<string | null>(null)
   const [sendError, setSendError] = useState<string | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
+  // Tracks the in-flight run's study id so live section_ready cards can be
+  // stamped with it as they arrive — set once at push-time, not read
+  // reactively later, so each card stays correctly attributed even if a
+  // second run starts before reload.
+  const activeStudyIdRef = useRef<string | undefined>(undefined)
+
+  // The "glossary" section_ready event (localized TAM/SAM/ROI/... definitions)
+  // isn't rendered as its own card — SectionCard has no branch for it — it's
+  // only consumed here to feed JargonTerm tooltips on the other cards.
+  const glossaryTerms = useMemo(() => {
+    for (let i = transcript.length - 1; i >= 0; i--) {
+      const item = transcript[i]
+      if (item.kind === 'section' && item.section === 'glossary') {
+        return (item.data as { terms: Record<string, string> }).terms
+      }
+    }
+    return undefined
+  }, [transcript])
 
   useEffect(() => {
     if (!projectId) return
@@ -280,24 +349,55 @@ export function ChatPage() {
             ...prev,
             { kind: 'tool_error', toolName: payload.tool_name, error: payload.error },
           ])
+        } else if (evt.event === 'study_started') {
+          const payload = evt.data as { study_id: string }
+          activeStudyIdRef.current = payload.study_id
         } else if (evt.event === 'section_ready') {
           const payload = evt.data as { section: string; data: unknown }
           setTranscript((prev) => [
             ...prev,
-            { kind: 'section', section: payload.section, data: payload.data },
+            {
+              kind: 'section',
+              section: payload.section,
+              data: payload.data,
+              studyId: activeStudyIdRef.current,
+            },
           ])
+          setProgressLabel(null)
+        } else if (evt.event === 'chat_message_delta') {
+          const payload = evt.data as ChatMessageDeltaPayload
+          setTranscript((prev) => {
+            const last = prev[prev.length - 1]
+            if (last && last.kind === 'message' && last.streaming) {
+              return [...prev.slice(0, -1), { ...last, content: last.content + payload.content }]
+            }
+            return [
+              ...prev,
+              {
+                kind: 'message',
+                id: `streaming-${Date.now()}`,
+                role: 'assistant',
+                content: payload.content,
+                streaming: true,
+              },
+            ]
+          })
           setProgressLabel(null)
         } else if (evt.event === 'chat_message_completed') {
           const payload = evt.data as ChatMessageCompletedPayload
-          setTranscript((prev) => [
-            ...prev,
-            {
+          setTranscript((prev) => {
+            const finalMessage: TranscriptItem = {
               kind: 'message',
               id: payload.message_id ?? `local-${Date.now()}`,
               role: payload.role,
               content: payload.content,
-            },
-          ])
+            }
+            const last = prev[prev.length - 1]
+            if (last && last.kind === 'message' && last.streaming) {
+              return [...prev.slice(0, -1), finalMessage]
+            }
+            return [...prev, finalMessage]
+          })
           setProgressLabel(null)
         } else if (evt.event === 'agent_started') {
           const payload = evt.data as { agent: string }
@@ -374,17 +474,25 @@ export function ChatPage() {
                   No messages yet. Ask the assistant to build a feasibility study for this project.
                 </p>
               )}
-              {transcript.map((item, i) => {
-                if (item.kind === 'message') return <MessageBubble key={i} item={item} />
-                if (item.kind === 'tool_error') {
-                  return <ToolErrorBubble key={i} toolName={item.toolName} error={item.error} />
-                }
-                return (
-                  <div key={i} className="flex justify-start">
-                    <SectionCard section={item.section} data={item.data} />
-                  </div>
-                )
-              })}
+              <GlossaryProvider terms={glossaryTerms}>
+                {transcript.map((item, i) => {
+                  if (item.kind === 'message') return <MessageBubble key={i} item={item} />
+                  if (item.kind === 'tool_error') {
+                    return <ToolErrorBubble key={i} toolName={item.toolName} error={item.error} />
+                  }
+                  if (item.section === 'glossary') return null
+                  return (
+                    <div key={i} className="flex justify-start">
+                      <SectionCard
+                        section={item.section}
+                        data={item.data}
+                        projectId={projectId}
+                        studyId={item.studyId}
+                      />
+                    </div>
+                  )
+                })}
+              </GlossaryProvider>
               {progressLabel && (
                 <div className="flex justify-start">
                   <div className="max-w-md rounded-lg bg-gray-50 border border-gray-200 px-3 py-1.5 text-xs text-gray-500 italic">
