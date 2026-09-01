@@ -5,6 +5,7 @@ import type {
   MemoryEntry,
   ProjectSummary,
   StartStudyRequest,
+  StudyResultResponse,
 } from './types'
 
 const BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8007'
@@ -47,6 +48,38 @@ export async function getBusinessProfile(projectId: string): Promise<BusinessPro
     throw new Error(await errorMessageFor(res))
   }
   return (await res.json()) as BusinessProfile
+}
+
+export async function getProject(projectId: string): Promise<ProjectSummary> {
+  const res = await fetch(`${BASE}/api/projects/${projectId}`)
+  if (!res.ok) {
+    throw new Error(await errorMessageFor(res))
+  }
+  return (await res.json()) as ProjectSummary
+}
+
+// Thrown when a specific study id can't be found — distinguishes "no such
+// study" (show an empty/not-found state) from a generic network/server
+// failure (show a retry button) in the report page.
+export class StudyNotFoundError extends Error {}
+
+export async function listStudies(projectId: string): Promise<StudyResultResponse[]> {
+  const res = await fetch(`${BASE}/api/projects/${projectId}/studies`)
+  if (!res.ok) {
+    throw new Error(await errorMessageFor(res))
+  }
+  return (await res.json()) as StudyResultResponse[]
+}
+
+export async function getStudyById(projectId: string, studyId: string): Promise<StudyResultResponse> {
+  const res = await fetch(`${BASE}/api/projects/${projectId}/studies/${studyId}`)
+  if (res.status === 404) {
+    throw new StudyNotFoundError(await errorMessageFor(res))
+  }
+  if (!res.ok) {
+    throw new Error(await errorMessageFor(res))
+  }
+  return (await res.json()) as StudyResultResponse
 }
 
 export async function createProject(payload: StartStudyRequest): Promise<string> {

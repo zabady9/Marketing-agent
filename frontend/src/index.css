@@ -11,3 +11,55 @@
     @apply text-gray-900 antialiased;
   }
 }
+
+/* Inter/JetBrains Mono have no Arabic glyph coverage — fall back to an
+   Arabic-capable face wherever a page (or the study report) goes RTL. */
+[dir='rtl'] {
+  font-family: 'Noto Sans Arabic', 'Inter', system-ui, sans-serif;
+}
+
+@media print {
+  .print\:hidden {
+    display: none !important;
+  }
+
+  body {
+    background: #fff;
+  }
+
+  /* Force a page break between each top-level report section instead of
+     letting a section split awkwardly across pages. */
+  section {
+    break-inside: avoid;
+    page-break-after: always;
+  }
+
+  section:last-of-type {
+    page-break-after: auto;
+  }
+
+  a {
+    /* Keep link color (default browser print stylesheets often reset this to
+       black, which makes citation links indistinguishable from plain text). */
+    color: #4338ca !important;
+    text-decoration: underline;
+  }
+
+  /* Footnote/citation text stays legible in print instead of shrinking further. */
+  sup, .text-\[10px\], .text-\[11px\] {
+    font-size: 9pt !important;
+  }
+
+  /* Calculation-trace disclosures (MethodologyDisclosure) are a click-to-reveal
+     <details> on screen. A reader can't click anything in a PDF, so
+     StudyReportPage forces every <details> element's `open` attribute true
+     just before printing (see its beforeprint/afterprint handler) — once
+     open, the browser's own default rendering already shows the content, no
+     CSS override needed for that. This just hides the now-redundant toggle
+     affordance once printed/open. (JargonTerm doesn't use <details> at all —
+     it's embedded inline inside <p>/<span> label text, so it handles its own
+     print visibility via a plain CSS class instead — see its component.) */
+  details[open] > summary {
+    display: none !important;
+  }
+}

@@ -1,10 +1,113 @@
 import type { ReactNode } from 'react'
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { getBusinessProfile } from '../api'
-import type { BusinessProfile } from '../types'
+import { getBusinessProfile, listStudies } from '../api'
+import { formatDate } from '../lib/format'
+import type { BusinessProfile, StudyResultResponse } from '../types'
 
 type LoadState = 'loading' | 'loaded' | 'error'
+type StudyLoadState = 'loading' | 'loaded' | 'error'
+
+const STUDY_STATUS_LABELS: Record<string, string> = {
+  pending: 'Pending',
+  running: 'Running…',
+  completed: 'Completed',
+  failed: 'Failed',
+}
+
+const STUDY_STATUS_CLASSES: Record<string, string> = {
+  pending: 'bg-gray-100 text-gray-600',
+  running: 'bg-amber-100 text-amber-700',
+  completed: 'bg-emerald-100 text-emerald-700',
+  failed: 'bg-red-100 text-red-700',
+}
+
+const VERDICT_LABELS: Record<string, string> = {
+  proceed: 'Proceed',
+  proceed_with_caution: 'Proceed with caution',
+  do_not_proceed: 'Do not proceed',
+  unavailable: 'Unavailable',
+}
+
+function StudyRow({ projectId, study }: { projectId: string; study: StudyResultResponse }) {
+  return (
+    <div className="flex items-center justify-between gap-4 py-2 first:pt-0 last:pb-0">
+      <div>
+        <div className="flex items-center gap-2">
+          <p className="text-sm font-medium text-gray-900">Feasibility Study Report</p>
+          <span
+            className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-medium whitespace-nowrap ${
+              STUDY_STATUS_CLASSES[study.status] ?? 'bg-gray-100 text-gray-600'
+            }`}
+          >
+            {STUDY_STATUS_LABELS[study.status] ?? study.status}
+          </span>
+          {study.status === 'completed' && study.verdict && (
+            <span className="text-xs text-gray-500">
+              {VERDICT_LABELS[study.verdict] ?? study.verdict}
+            </span>
+          )}
+        </div>
+        <p className="mt-0.5 text-xs text-gray-400">
+          {formatDate(study.completed_at ?? study.started_at)}
+        </p>
+      </div>
+      <Link
+        to={`/projects/${projectId}/studies/${study.id}`}
+        className="shrink-0 text-sm font-medium text-indigo-600 hover:text-indigo-700 hover:underline"
+      >
+        Open →
+      </Link>
+    </div>
+  )
+}
+
+function GeneratedReports({ projectId }: { projectId: string }) {
+  const [studies, setStudies] = useState<StudyResultResponse[]>([])
+  const [state, setState] = useState<StudyLoadState>('loading')
+
+  useEffect(() => {
+    let cancelled = false
+    setState('loading')
+    listStudies(projectId)
+      .then((data) => {
+        if (cancelled) return
+        setStudies(data)
+        setState('loaded')
+      })
+      .catch(() => {
+        if (cancelled) return
+        setState('error')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [projectId])
+
+  if (state === 'loading') return null
+
+  return (
+    <div className="rounded-xl border border-gray-200 bg-white p-6 mb-6">
+      <p className="text-xs font-medium text-gray-500 mb-3">Generated Reports</p>
+      {state === 'error' && <p className="text-sm text-gray-400">Couldn't check for reports.</p>}
+      {state === 'loaded' && studies.length === 0 && (
+        <div>
+          <p className="text-sm text-gray-400">No reports generated yet</p>
+          <p className="mt-0.5 text-xs text-gray-400">
+            Ask the assistant in chat to run a feasibility study.
+          </p>
+        </div>
+      )}
+      {state === 'loaded' && studies.length > 0 && (
+        <div className="divide-y divide-gray-100">
+          {studies.map((study) => (
+            <StudyRow key={study.id} projectId={projectId} study={study} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
 
 function SourceBadge({ source, lowConfidence }: { source: string; lowConfidence?: boolean }) {
   const isEstimated = source === 'estimated'
@@ -103,6 +206,8 @@ export function BusinessProfilePage() {
             Chat about this project →
           </Link>
         </div>
+
+        {projectId && <GeneratedReports projectId={projectId} />}
 
         <h1 className="text-3xl font-semibold text-gray-900 tracking-tight mb-1">
           Business Profile

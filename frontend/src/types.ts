@@ -8,6 +8,18 @@ export type MarketPosition = 'leader' | 'challenger' | 'niche' | 'unknown'
 export type QCIssue = 'citation_gap' | 'faithfulness' | 'data_gap_mismatch'
 export type QCSeverity = 'warning' | 'error'
 export type Verdict = 'proceed' | 'proceed_with_caution' | 'do_not_proceed'
+
+// Per-claim sourcing classification — mirrors app/schemas/common.py::ClaimType.
+export type ClaimType =
+  | 'verified_fact'
+  | 'assumption'
+  | 'calculated_estimate'
+  | 'forecast'
+  | 'opinion'
+  | 'unavailable'
+
+// A section's claim_types field: field name -> its (constant) classification.
+export type ClaimTypeLegend = Record<string, ClaimType>
 export type AgentName =
   | 'intake'
   | 'market_sizing'
@@ -76,6 +88,7 @@ export interface ChatMessageRecord {
   role: ChatRole
   content: string
   tool_name: string | null
+  study_id: string | null
   created_at: string
 }
 
@@ -103,6 +116,10 @@ export interface ChatToolErrorPayload {
 export interface ChatMessageCompletedPayload {
   message_id: string | null
   role: ChatRole
+  content: string
+}
+
+export interface ChatMessageDeltaPayload {
   content: string
 }
 
@@ -157,6 +174,21 @@ export interface CalcTrace {
   inputs: Record<string, unknown>
   output: Record<string, unknown>
   input_confidence: InputConfidence
+  // One-sentence plain-language explanation of the formula. Empty until the
+  // backend's static CALC_METHODOLOGY lookup is wired in — see report.py.
+  methodology: string
+}
+
+// Narrow shape of CalcTrace.output for the cash_flow figure specifically —
+// the field is an untyped Record<string, unknown> on CashFlowFigure's own
+// calculation_trace, so callers cast to this at the point of use rather than
+// widening CashFlowFigure itself.
+export interface CashFlowCalcOutput {
+  monthly_net_cash_flow: number
+  cash_position_by_month: number[]
+  payback_month: number | null
+  final_position: number
+  horizon_months: number
 }
 
 // ── Section data shapes (matching orchestrator section_ready payloads) ─────────
@@ -168,6 +200,11 @@ export interface EstimatedMarketFigure {
   source: 'estimated'
   confidence: MarketConfidence
   citations: Citation[]
+  // Computed deterministically (see market_sizing.py::_classify_figure) —
+  // verified_fact when a citation resolved, unavailable when value is null.
+  claim_type: ClaimType
+  // LLM-authored one-line derivation note. Empty until that prompt work lands.
+  methodology: string
 }
 
 export interface MarketOverviewData {
@@ -176,10 +213,13 @@ export interface MarketOverviewData {
   som: EstimatedMarketFigure
   growth_rate_cagr: number | null
   growth_rate_citations: Citation[]
+  growth_rate_claim_type: ClaimType
+  growth_rate_methodology: string
   narrative: LocalizedText
   key_insights: string[]
   citations: Citation[]
   search_queries_used: string[]
+  claim_types: ClaimTypeLegend
 }
 
 export interface CompetitorProfile {
@@ -189,6 +229,8 @@ export interface CompetitorProfile {
   strengths: string[]
   weaknesses: string[]
   citations: Citation[]
+  claim_type: ClaimType
+  methodology: string
 }
 
 export interface CompetitiveLandscapeData {
@@ -198,12 +240,14 @@ export interface CompetitiveLandscapeData {
   narrative: LocalizedText
   citations: Citation[]
   search_queries_used: string[]
+  claim_types: ClaimTypeLegend
 }
 
 export interface FinancialInputFigure {
   value: number | null
   currency: string
   source: SourceType
+  claim_type: ClaimType
 }
 
 export interface CalculatedFigure {
@@ -211,25 +255,37 @@ export interface CalculatedFigure {
   source: 'calculated'
   input_confidence: InputConfidence
   calculation_trace?: CalcTrace
+  claim_type: ClaimType
 }
 
 export interface NPVFigure extends CalculatedFigure {
   is_positive: boolean
 }
 
+// Real shape of a single scenario in sensitivity_analysis.value — see
+// app/tools/financial_calc.py::run_sensitivity_analysis. Note this is
+// break-even data only; the scenarios do NOT carry per-scenario NPV/ROI%
+// figures (those only exist as flat, non-scenario CalculatedFigures above).
 export interface SensitivityScenario {
-  revenue_multiplier?: number
-  break_even_months?: number
-  npv?: number
-  roi_percent?: number
+  revenue_multiplier: number
+  monthly_unit_sales: number
+  break_even_units: number
+  break_even_months: number
+  contribution_margin_per_unit: number
+  monthly_revenue_at_break_even: number
   [key: string]: unknown
 }
 
+// `value` IS the scenarios record directly — orchestrator.py's
+// _financial_feasibility_data does `output.sensitivity.value["scenarios"]`,
+// unwrapping the {scenarios: {...}} shape from run_sensitivity_analysis()
+// before it ever reaches this payload. There is no `.scenarios` key here.
 export interface SensitivityFigure {
-  value: { scenarios: Record<string, SensitivityScenario> }
+  value: Record<'pessimistic' | 'base' | 'optimistic', SensitivityScenario>
   source: 'calculated'
   input_confidence: InputConfidence
   calculation_trace?: CalcTrace
+  claim_type: ClaimType
 }
 
 export interface CashFlowFigure {
@@ -238,6 +294,23 @@ export interface CashFlowFigure {
   source: 'calculated'
   input_confidence: InputConfidence
   calculation_trace?: CalcTrace
+  claim_type: ClaimType
+}
+
+// See app/tools/financial_calc.py::calculate_cost_structure.
+export interface CostStructureValue {
+  capex: number
+  cumulative_opex: number
+  total_cost: number
+  horizon_months: number
+}
+
+export interface CostStructureFigure {
+  value: CostStructureValue
+  source: 'calculated'
+  input_confidence: InputConfidence
+  calculation_trace?: CalcTrace
+  claim_type: ClaimType
 }
 
 // roi_year_N key is dynamic — use index signature alongside known keys
@@ -250,7 +323,9 @@ export interface FinancialFeasibilityData {
   npv: NPVFigure
   sensitivity_analysis: SensitivityFigure
   cash_flow: CashFlowFigure
+  cost_structure: CostStructureFigure
   narrative: LocalizedText
+  claim_types: ClaimTypeLegend
   [key: string]: unknown
 }
 
@@ -260,6 +335,11 @@ export interface RiskEntry {
   probability: RiskLevel
   impact: RiskLevel
   mitigation: string
+  // Previously resolved then discarded before reaching the output — now
+  // threaded through so individual risks are sourceable.
+  citations: Citation[]
+  claim_type: ClaimType
+  methodology: string
 }
 
 export interface RiskAssessmentData {
@@ -268,6 +348,7 @@ export interface RiskAssessmentData {
   narrative: LocalizedText
   citations: Citation[]
   search_queries_used: string[]
+  claim_types: ClaimTypeLegend
 }
 
 export interface ConfidenceBreakdown {
@@ -288,6 +369,7 @@ export interface ExecutiveSummaryData {
   data_gaps: string[]
   contradictions: string[]
   rationale: LocalizedText
+  claim_types: ClaimTypeLegend
 }
 
 // ── Parsed section (section_ready envelope + typed data) ──────────────────────
@@ -295,11 +377,21 @@ export interface ExecutiveSummaryData {
 export interface ParsedSection<T> {
   section: string
   language: string
-  review_recommended: boolean
+  // Only set by market_overview/financial_feasibility envelopes today — see
+  // orchestrator.py::PipelineResult.to_sections_payload.
+  review_recommended?: boolean
   data: T
 }
 
+// Localized jargon-term definitions (TAM, SAM, ROI, ...) — see
+// app/services/glossary.py::GLOSSARY_TERMS for the canonical English term
+// list; values here are localized to the section's `language`.
+export interface GlossaryData {
+  terms: Record<string, string>
+}
+
 export interface SectionStore {
+  glossary?: ParsedSection<GlossaryData>
   market_overview?: ParsedSection<MarketOverviewData>
   competitive_landscape?: ParsedSection<CompetitiveLandscapeData>
   financial_feasibility?: ParsedSection<FinancialFeasibilityData>
@@ -485,4 +577,26 @@ export interface StudyState {
   failureReason: string | null
   // set on intake_error — drives distinct UI vs other failures
   failureField: string | null
+}
+
+// ── GET /api/projects/{id}/study response (app/schemas/study.py) ──────────────
+
+export type StudyRunStatus = 'pending' | 'running' | 'completed' | 'failed'
+
+export interface StudyResultResponse {
+  id: string
+  project_id: string
+  status: StudyRunStatus
+  // Same envelope shape as SectionStore — only sections that completed are
+  // present, whether the run finished cleanly or hit a fatal failure partway.
+  sections: SectionStore
+  verdict: Verdict | 'unavailable' | null
+  confidence_score: number | null
+  qc_summary: QCSummary | null
+  fatal_agent_failures: string[]
+  error: string | null
+  started_at: string | null
+  completed_at: string | null
+  created_at: string
+  updated_at: string
 }
