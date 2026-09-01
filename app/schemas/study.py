@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict
 class StudyResultResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
+    id: str
     project_id: str
     status: str
     sections: dict
@@ -20,3 +21,4 @@ class StudyResultResponse(BaseModel):
     completed_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    deleted_at: datetime | None

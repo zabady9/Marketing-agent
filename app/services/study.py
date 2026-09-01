@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 from app.models import BusinessProfile, Project, StudyResult
 from app.orchestrator import run_feasibility_pipeline
 from app.schemas.intake import FeasibilityInput, FieldWithSource, Source
-from app.sse import EventQueue
+from app.services.glossary import get_or_create_glossary
+from app.sse import EventQueue, SSEEvent
 
 
 def feasibility_input_from_business_profile(profile: BusinessProfile) -> FeasibilityInput:
@@ -107,8 +108,8 @@ async def run_feasibility_study(
     db: Session, project: Project, queue: EventQueue | None = None
 ) -> StudyResult:
     """Runs the feasibility pipeline (phases 2-6) off the project's persisted
-    BusinessProfile and stores the result on the project, overwriting any
-    previous run in place (see StudyResult's documented V1 no-history limitation).
+    BusinessProfile and persists a new StudyResult row for this run — a project
+    accumulates one row per run, none of them overwritten.
 
     `queue` is optional: pass one (e.g. from the future chat endpoint) to have
     progress events streamed live as the pipeline runs; omit it to just run to
@@ -116,21 +117,25 @@ async def run_feasibility_study(
     queue that isn't passed in."""
     feasibility_input = feasibility_input_from_business_profile(project.business_profile)
 
-    study_result = project.study_result
-    if study_result is None:
-        study_result = StudyResult(project_id=project.id)
-        db.add(study_result)
+    if queue is None:
+        queue = EventQueue()
+
+    study_result = StudyResult(project_id=project.id)
+    db.add(study_result)
 
     study_result.status = "running"
     study_result.started_at = datetime.utcnow()
     study_result.error = None
     db.commit()
 
-    if queue is None:
-        queue = EventQueue()
+    # Emitted before the pipeline runs so live consumers (e.g. the chat UI)
+    # know which specific study this run's progress events belong to.
+    await queue.put(SSEEvent.STUDY_STARTED, {"study_id": study_result.id})
+
+    glossary = await get_or_create_glossary(db, feasibility_input.output_language)
 
     pipeline_result = await run_feasibility_pipeline(
-        feasibility_input.study_id, feasibility_input, queue
+        feasibility_input.study_id, feasibility_input, queue, glossary=glossary
     )
 
     study_result.sections = pipeline_result.to_sections_payload()
@@ -166,3 +171,12 @@ async def run_feasibility_study(
     db.commit()
     db.refresh(study_result)
     return study_result
+
+
+def list_study_results(db: Session, project: Project) -> list[StudyResult]:
+    return (
+        db.query(StudyResult)
+        .filter(StudyResult.project_id == project.id, StudyResult.deleted_at.is_(None))
+        .order_by(StudyResult.created_at.desc())
+        .all()
+    )

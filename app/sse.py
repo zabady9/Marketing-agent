@@ -28,6 +28,9 @@ class SSEEvent(StrEnum):
     # Report sections (streamed incrementally)
     SECTION_READY = "section_ready"
 
+    # Study lifecycle
+    STUDY_STARTED = "study_started"
+
     # QC gate
     QC_STARTED = "qc_started"
     QC_FLAG_RAISED = "qc_flag_raised"
@@ -35,6 +38,7 @@ class SSEEvent(StrEnum):
 
     # Chat
     CHAT_TOOL_ERROR = "chat_tool_error"
+    CHAT_MESSAGE_DELTA = "chat_message_delta"
     CHAT_MESSAGE_COMPLETED = "chat_message_completed"
 
 

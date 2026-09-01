@@ -28,6 +28,7 @@ class ChatSession(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
     )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     project: Mapped["Project"] = relationship(back_populates="chat_sessions")
     messages: Mapped[list["ChatMessage"]] = relationship(
@@ -53,8 +54,16 @@ class ChatMessage(Base):
     # Set when role == "tool" (or an assistant turn that invoked one) — e.g.
     # "run_feasibility_study". Null for plain user/assistant text turns.
     tool_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Set only on the tool row for a successful run_feasibility_study_tool call —
+    # lets chat history reconstruction link a historical card to the specific
+    # study it came from. ON DELETE SET NULL: a study deleted independently of
+    # its project clears the reference instead of leaving a dangling id.
+    study_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("study_results.id", ondelete="SET NULL"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     session: Mapped["ChatSession"] = relationship(back_populates="messages")

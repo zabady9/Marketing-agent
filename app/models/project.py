@@ -18,9 +18,7 @@ class Project(Base):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
-    # Nullable, unused by any endpoint yet — reserved so a future soft-delete/
-    # archive endpoint is a pure additive change, not a schema migration.
-    archived_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )
@@ -33,10 +31,10 @@ class Project(Base):
         uselist=False,
         cascade="all, delete-orphan",
     )
-    study_result: Mapped["StudyResult | None"] = relationship(
+    study_results: Mapped[list["StudyResult"]] = relationship(
         back_populates="project",
-        uselist=False,
         cascade="all, delete-orphan",
+        order_by="StudyResult.created_at.desc()",
     )
     chat_sessions: Mapped[list["ChatSession"]] = relationship(
         back_populates="project",

@@ -100,5 +100,8 @@ class BusinessProfile(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
     )
+    # Only ever set as a side effect of its parent Project being soft-deleted —
+    # this row has no independent lifecycle in the UI.
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     project: Mapped["Project"] = relationship(back_populates="business_profile")

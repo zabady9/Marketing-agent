@@ -11,9 +11,8 @@ from app.db import Base
 
 
 class StudyResult(Base):
-    """The latest feasibility-study run for a project. V1 is intentionally a
-    single row per project, overwritten in place on every new run — see the
-    plan doc's "StudyResult overwrite behavior" note: no run history is kept."""
+    """One row per feasibility-study run. A project may have many, one per
+    run_feasibility_study_tool invocation; rows are never overwritten."""
 
     __tablename__ = "study_results"
 
@@ -24,7 +23,6 @@ class StudyResult(Base):
         String(36),
         ForeignKey("projects.id", ondelete="CASCADE"),
         nullable=False,
-        unique=True,
     )
 
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
@@ -48,5 +46,6 @@ class StudyResult(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
     )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
-    project: Mapped["Project"] = relationship(back_populates="study_result")
+    project: Mapped["Project"] = relationship(back_populates="study_results")

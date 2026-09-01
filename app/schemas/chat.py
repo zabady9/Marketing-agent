@@ -16,7 +16,9 @@ class ChatMessageResponse(BaseModel):
     role: str
     content: str
     tool_name: str | None
+    study_id: str | None
     created_at: datetime
+    deleted_at: datetime | None
 
 
 class ChatSessionResponse(BaseModel):
@@ -27,3 +29,4 @@ class ChatSessionResponse(BaseModel):
     title: str | None
     created_at: datetime
     updated_at: datetime
+    deleted_at: datetime | None

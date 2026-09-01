@@ -15,7 +15,7 @@ class ProjectSummary(BaseModel):
 
 
 class ProjectDetail(ProjectSummary):
-    archived_at: datetime | None
+    deleted_at: datetime | None
     updated_at: datetime
 
 

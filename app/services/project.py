@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
 from sqlalchemy.orm import Session
 
@@ -128,15 +129,28 @@ async def create_project_from_questionnaire(
 
 
 def list_projects(db: Session) -> list[Project]:
-    return db.query(Project).order_by(Project.created_at.desc()).all()
+    return (
+        db.query(Project)
+        .filter(Project.deleted_at.is_(None))
+        .order_by(Project.created_at.desc())
+        .all()
+    )
 
 
 def get_project(db: Session, project_id: str) -> Project | None:
-    return db.query(Project).filter_by(id=project_id).one_or_none()
+    return (
+        db.query(Project)
+        .filter(Project.id == project_id, Project.deleted_at.is_(None))
+        .one_or_none()
+    )
 
 
 def get_business_profile(db: Session, project_id: str) -> BusinessProfile | None:
-    return db.query(BusinessProfile).filter_by(project_id=project_id).one_or_none()
+    return (
+        db.query(BusinessProfile)
+        .filter(BusinessProfile.project_id == project_id, BusinessProfile.deleted_at.is_(None))
+        .one_or_none()
+    )
 
 
 def business_profile_to_response(profile: BusinessProfile) -> BusinessProfileResponse:

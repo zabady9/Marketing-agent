@@ -9,7 +9,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.agents.intake import IntakeHardBlockError
 from app.db import get_db
-from app.models import ChatMessage
+from app.models import ChatMessage, StudyResult
 from app.schemas.chat import ChatMessageCreate, ChatMessageResponse, ChatSessionResponse
 from app.schemas.intake import FeasibilityStartRequest
 from app.schemas.project import (
@@ -20,7 +20,12 @@ from app.schemas.project import (
     ProjectSummary,
 )
 from app.schemas.study import StudyResultResponse
-from app.services.chat import create_chat_session, get_chat_session, list_chat_sessions
+from app.services.chat import (
+    create_chat_session,
+    get_chat_session,
+    list_chat_messages,
+    list_chat_sessions,
+)
 from app.services.chat_agent import run_chat_turn
 from app.services.project import (
     business_profile_to_response,
@@ -30,6 +35,7 @@ from app.services.project import (
     list_projects,
     update_business_profile,
 )
+from app.services.study import list_study_results
 from app.sse import EventQueue, SSEEvent
 
 logger = logging.getLogger(__name__)
@@ -84,18 +90,34 @@ def update_business_profile_endpoint(
     return business_profile_to_response(profile)
 
 
-@router.get("/{project_id}/study", response_model=StudyResultResponse)
-def get_study_endpoint(project_id: str, db: Session = Depends(get_db)) -> StudyResultResponse:
-    """Read-only. There is deliberately no public POST .../study/run route —
+@router.get("/{project_id}/studies", response_model=list[StudyResultResponse])
+def list_studies_endpoint(project_id: str, db: Session = Depends(get_db)) -> list[StudyResultResponse]:
+    """Read-only. There is deliberately no public POST .../studies route —
     per the plan, the feasibility pipeline is only triggered through the chat
     agent's run_feasibility_study tool (see chat/messages below), not as a
-    standalone public flow."""
+    standalone public flow. Newest-first, via the relationship's order_by."""
     project = get_project(db, project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
-    if project.study_result is None:
-        raise HTTPException(status_code=404, detail="No study result yet")
-    return StudyResultResponse.model_validate(project.study_result)
+    return [StudyResultResponse.model_validate(s) for s in list_study_results(db, project)]
+
+
+@router.get("/{project_id}/studies/{study_id}", response_model=StudyResultResponse)
+def get_study_by_id_endpoint(
+    project_id: str, study_id: str, db: Session = Depends(get_db)
+) -> StudyResultResponse:
+    # Filtering by both id and project_id matters: without the project_id
+    # filter, a valid study id from a different project would leak its data
+    # through this project's URL.
+    study = (
+        db.query(StudyResult)
+        .filter_by(id=study_id, project_id=project_id)
+        .filter(StudyResult.deleted_at.is_(None))
+        .one_or_none()
+    )
+    if study is None:
+        raise HTTPException(status_code=404, detail="Study not found")
+    return StudyResultResponse.model_validate(study)
 
 
 @router.get("/{project_id}/chat/sessions", response_model=list[ChatSessionResponse])
@@ -131,7 +153,7 @@ def list_chat_messages_endpoint(
     session = get_chat_session(db, project, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Chat session not found")
-    return list(session.messages)
+    return list_chat_messages(db, session)
 
 
 @router.post("/{project_id}/chat/sessions/{session_id}/messages")

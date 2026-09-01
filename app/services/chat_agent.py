@@ -68,16 +68,18 @@ def _system_prompt(project: Project, memory_entries: list[MemoryEntry]) -> str:
     )
 
 
-def _build_tools(db: Session, project: Project, queue: EventQueue) -> list:
+def _build_tools(db: Session, project: Project, queue: EventQueue, last_study: dict) -> list:
     @tool
     async def run_feasibility_study_tool() -> str:
         """Run the full feasibility study pipeline (market sizing, competitive
         analysis, financial modeling, risk assessment, and synthesis) for this
-        project's business profile, and return a summary of the result. This
-        overwrites any previous study result for the project."""
+        project's business profile, and return a summary of the result. Each
+        run creates a new, independently viewable study — past runs are kept,
+        not overwritten."""
         result = await run_feasibility_study(db, project, queue)
         if result.status == "failed":
             return f"Study failed: {result.error}"
+        last_study["id"] = result.id
         return (
             f"Study completed. Verdict: {result.verdict}. "
             f"Confidence score: {result.confidence_score}. "
@@ -169,6 +171,8 @@ def _load_history_messages(session: ChatSession) -> list:
     run_chat_turn) — only cross-request replay is folded down like this."""
     messages: list = []
     for m in session.messages:
+        if m.deleted_at is not None:
+            continue
         if m.role == "user":
             messages.append(HumanMessage(content=m.content))
         elif m.role == "assistant":
@@ -220,7 +224,8 @@ async def run_chat_turn(
     maybe_set_title(session, user_content)
     db.commit()
 
-    tools = _build_tools(db, project, queue)
+    last_study: dict = {}
+    tools = _build_tools(db, project, queue, last_study)
     tool_by_name = {t.name: t for t in tools}
     llm = _build_llm().bind_tools(tools)
 
@@ -229,7 +234,12 @@ async def run_chat_turn(
     history.extend(_load_history_messages(session))
 
     for round_num in range(MAX_TOOL_ROUNDS):
-        response = await llm.ainvoke(history)
+        response = None
+        async for chunk in llm.astream(history):
+            response = chunk if response is None else response + chunk
+            delta_text = _extract_text(chunk.content)
+            if delta_text:
+                await queue.put(SSEEvent.CHAT_MESSAGE_DELTA, {"content": delta_text})
 
         if not response.tool_calls:
             assistant_message = ChatMessage(role="assistant", content=_extract_text(response.content))
@@ -263,7 +273,12 @@ async def run_chat_turn(
                 tool_result = f"Error running {call['name']}: {exc}"
 
             tool_message_row = ChatMessage(
-                role="tool", content=str(tool_result), tool_name=call["name"]
+                role="tool",
+                content=str(tool_result),
+                tool_name=call["name"],
+                study_id=last_study.pop("id", None)
+                if call["name"] == "run_feasibility_study_tool"
+                else None,
             )
             session.messages.append(tool_message_row)
             db.commit()
