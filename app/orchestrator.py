@@ -28,10 +28,13 @@ def _market_overview_data(output: MarketSizingOutput) -> dict:
         "som": output.som.model_dump(),
         "growth_rate_cagr": output.growth_rate_cagr,
         "growth_rate_citations": [c.model_dump() for c in output.growth_rate_citations],
+        "growth_rate_claim_type": output.growth_rate_claim_type,
+        "growth_rate_methodology": output.growth_rate_methodology,
         "narrative": output.narrative.model_dump(),
         "key_insights": output.key_insights,
         "citations": [c.model_dump() for c in output.all_citations],
         "search_queries_used": output.search_queries_used,
+        "claim_types": output.claim_types,
     }
 
 
@@ -43,6 +46,7 @@ def _competitive_landscape_data(output: CompetitiveAnalysisOutput) -> dict:
         "narrative": output.narrative.model_dump(),
         "citations": [c.model_dump() for c in output.all_citations],
         "search_queries_used": output.search_queries_used,
+        "claim_types": output.claim_types,
     }
 
 
@@ -52,34 +56,40 @@ def _financial_feasibility_data(output: FinancialModelOutput) -> dict:
             "value": output.capex_value,
             "currency": output.capex_currency,
             "source": output.capex_source,
+            "claim_type": output.claim_types.get("capex_value", "assumption"),
         },
         "opex_monthly": {
             "value": output.opex_monthly_value,
             "currency": output.opex_monthly_currency,
             "source": output.opex_monthly_source,
+            "claim_type": output.claim_types.get("opex_monthly_value", "assumption"),
         },
         "break_even_months": {
             "value": output.break_even.value["break_even_months"],
             "source": "calculated",
             "input_confidence": output.break_even.input_confidence,
             "calculation_trace": output.break_even.calculation_trace.model_dump(),
+            "claim_type": output.break_even.claim_type,
         },
         "break_even_units": {
             "value": output.break_even.value["break_even_units"],
             "source": "calculated",
             "input_confidence": output.break_even.input_confidence,
+            "claim_type": output.break_even.claim_type,
         },
         "roi_year_1": {
             "value": output.roi_year_1.value["roi_percent"],
             "source": "calculated",
             "input_confidence": output.roi_year_1.input_confidence,
             "calculation_trace": output.roi_year_1.calculation_trace.model_dump(),
+            "claim_type": output.roi_year_1.claim_type,
         },
         f"roi_year_{output.analysis_horizon_years}": {
             "value": output.roi_year_n.value["roi_percent"],
             "source": "calculated",
             "input_confidence": output.roi_year_n.input_confidence,
             "calculation_trace": output.roi_year_n.calculation_trace.model_dump(),
+            "claim_type": output.roi_year_n.claim_type,
         },
         "npv": {
             "value": output.npv.value["npv"],
@@ -87,12 +97,14 @@ def _financial_feasibility_data(output: FinancialModelOutput) -> dict:
             "source": "calculated",
             "input_confidence": output.npv.input_confidence,
             "calculation_trace": output.npv.calculation_trace.model_dump(),
+            "claim_type": output.npv.claim_type,
         },
         "sensitivity_analysis": {
             "value": output.sensitivity.value["scenarios"],
             "source": "calculated",
             "input_confidence": output.sensitivity.input_confidence,
             "calculation_trace": output.sensitivity.calculation_trace.model_dump(),
+            "claim_type": output.sensitivity.claim_type,
         },
         "cash_flow": {
             "payback_month": output.cash_flow.value["payback_month"],
@@ -100,8 +112,17 @@ def _financial_feasibility_data(output: FinancialModelOutput) -> dict:
             "source": "calculated",
             "input_confidence": output.cash_flow.input_confidence,
             "calculation_trace": output.cash_flow.calculation_trace.model_dump(),
+            "claim_type": output.cash_flow.claim_type,
+        },
+        "cost_structure": {
+            "value": output.cost_structure.value,
+            "source": "calculated",
+            "input_confidence": output.cost_structure.input_confidence,
+            "calculation_trace": output.cost_structure.calculation_trace.model_dump(),
+            "claim_type": output.cost_structure.claim_type,
         },
         "narrative": output.narrative.model_dump(),
+        "claim_types": output.claim_types,
     }
 
 
@@ -112,6 +133,7 @@ def _risk_assessment_data(output: RiskAssessmentOutput) -> dict:
         "narrative": output.narrative.model_dump(),
         "citations": [c.model_dump() for c in output.citations],
         "search_queries_used": output.search_queries_used,
+        "claim_types": output.claim_types,
     }
 
 
@@ -126,6 +148,7 @@ def _executive_summary_data(output: FeasibilitySynthesisOutput) -> dict:
         "data_gaps": output.data_gaps,
         "contradictions": output.contradictions,
         "rationale": output.rationale.model_dump(),
+        "claim_types": output.claim_types,
     }
 
 
@@ -143,6 +166,13 @@ class PipelineResult:
     synthesis_output: FeasibilitySynthesisOutput | None = None
     qc_output: CitationQCOutput | None = None
     fatal_agent_failures: list[str] = field(default_factory=list)
+    # Localized jargon-term definitions (TAM, SAM, ROI, ...) — resolved by the
+    # caller (app/services/study.py, via app.services.glossary) before the
+    # pipeline starts, since it only depends on output_language and benefits
+    # from being available as early as possible for live SSE consumers (e.g.
+    # chat SectionCards), not just the final persisted result.
+    glossary: dict[str, str] | None = None
+    glossary_language: str = "en"
 
     def to_sections_payload(self) -> dict[str, dict]:
         """Same envelope shape ({language, review_recommended?, data}) as the
@@ -150,6 +180,11 @@ class PipelineResult:
         live SSE stream and by a StudyResult persisted for later viewing.
         Only sections that actually completed are included."""
         sections: dict[str, dict] = {}
+        if self.glossary is not None:
+            sections["glossary"] = {
+                "language": self.glossary_language,
+                "data": {"terms": self.glossary},
+            }
         if self.market_output is not None:
             sections["market_overview"] = {
                 "language": self.market_output.output_language,
@@ -184,14 +219,30 @@ async def run_feasibility_pipeline(
     study_id: str,
     feasibility_input: FeasibilityInput,
     queue: EventQueue,
+    glossary: dict[str, str] | None = None,
 ) -> PipelineResult:
     """Phases 2-6 of the pipeline: market sizing + competitive analysis (run
     concurrently), financial modeling, risk assessment, synthesis, and the
     citation QC gate. Does NOT run intake (phase 1) — the caller supplies an
     already-built FeasibilityInput, whether freshly extracted from raw text
     or reconstructed from a persisted BusinessProfile (see
-    app/services/project.py and app/services/study.py)."""
-    result = PipelineResult()
+    app/services/project.py and app/services/study.py).
+
+    `glossary` (localized jargon-term definitions) is resolved by the caller
+    — it only depends on output_language, not on anything this pipeline
+    computes — and is emitted immediately, before any other section, so it's
+    available to live SSE consumers (e.g. chat SectionCards) from the start."""
+    result = PipelineResult(glossary=glossary, glossary_language=feasibility_input.output_language)
+
+    if glossary is not None:
+        await queue.put(
+            SSEEvent.SECTION_READY,
+            {
+                "section": "glossary",
+                "language": feasibility_input.output_language,
+                "data": {"terms": glossary},
+            },
+        )
 
     # ── Phase 4: Market Sizing + Competitive Analysis (concurrent) ────────
     market_result, competitive_result = await asyncio.gather(

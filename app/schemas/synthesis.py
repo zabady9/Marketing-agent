@@ -4,6 +4,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel
 
+from app.schemas.common import ClaimType
 from app.schemas.report import LocalizedText
 
 
@@ -25,3 +26,14 @@ class FeasibilitySynthesisOutput(BaseModel):
     data_gaps: list[str]            # explicitly listed null/unavailable fields
     contradictions: list[str]       # internal cross-section contradictions, or []
     rationale: LocalizedText        # why this verdict was reached
+
+    claim_types: dict[str, ClaimType] = {
+        "verdict": ClaimType.OPINION,
+        "confidence_score": ClaimType.CALCULATED_ESTIMATE,
+        "key_opportunities": ClaimType.OPINION,
+        "key_risks": ClaimType.OPINION,
+        "data_gaps": ClaimType.UNAVAILABLE,
+        "contradictions": ClaimType.OPINION,
+        "rationale": ClaimType.OPINION,
+        "executive_summary": ClaimType.OPINION,
+    }

@@ -11,10 +11,12 @@ import pytest
 from app.tools.financial_calc import (
     BreakEvenInput,
     CashFlowInput,
+    CostStructureInput,
     NPVInput,
     ROIInput,
     SensitivityInput,
     calculate_break_even,
+    calculate_cost_structure,
     calculate_npv,
     calculate_roi,
     get_financial_tools,
@@ -265,13 +267,63 @@ class TestProjectCashFlow:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# calculate_cost_structure
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestCalculateCostStructure:
+    def test_basic(self):
+        # capex=30k, opex=4k/mo, horizon=36mo -> cumulative_opex = 144,000
+        result = calculate_cost_structure(CostStructureInput(
+            capex=30_000,
+            opex_monthly=4_000,
+            horizon_months=36,
+        ))
+        assert result["capex"] == 30_000.0
+        assert result["cumulative_opex"] == 144_000.0
+        assert result["total_cost"] == 174_000.0
+        assert result["horizon_months"] == 36
+
+    def test_zero_opex(self):
+        result = calculate_cost_structure(CostStructureInput(
+            capex=10_000,
+            opex_monthly=0,
+            horizon_months=12,
+        ))
+        assert result["cumulative_opex"] == 0.0
+        assert result["total_cost"] == 10_000.0
+
+    def test_zero_capex(self):
+        # Pure-service business with no upfront investment — cost is opex-only.
+        result = calculate_cost_structure(CostStructureInput(
+            capex=0,
+            opex_monthly=2_500,
+            horizon_months=12,
+        ))
+        assert result["capex"] == 0.0
+        assert result["cumulative_opex"] == 30_000.0
+        assert result["total_cost"] == 30_000.0
+
+    def test_rounding(self):
+        # 999.995 * 3 = 2999.985 -> rounds to 2999.98 (banker's rounding) or 2999.99;
+        # assert via round() itself rather than hardcoding float rounding mode.
+        result = calculate_cost_structure(CostStructureInput(
+            capex=1_234.567,
+            opex_monthly=999.995,
+            horizon_months=3,
+        ))
+        assert result["capex"] == round(1_234.567, 2)
+        assert result["cumulative_opex"] == round(999.995 * 3, 2)
+        assert result["total_cost"] == round(result["capex"] + result["cumulative_opex"], 2)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # get_financial_tools (LangChain wrapper smoke test)
 # ──────────────────────────────────────────────────────────────────────────────
 
 class TestGetFinancialTools:
-    def test_returns_five_tools(self):
+    def test_returns_six_tools(self):
         tools = get_financial_tools()
-        assert len(tools) == 5
+        assert len(tools) == 6
 
     def test_tool_names(self):
         names = {t.name for t in get_financial_tools()}
@@ -281,6 +333,7 @@ class TestGetFinancialTools:
             "calculate_npv",
             "run_sensitivity_analysis",
             "project_cash_flow",
+            "calculate_cost_structure",
         }
 
     def test_tools_are_callable(self):

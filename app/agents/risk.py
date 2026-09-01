@@ -7,9 +7,9 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel
 
-from app.agents.base import AgentName, AgentSoftError, search_with_sse
+from app.agents.base import AgentName, AgentSoftError, gather_searches_with_sse
 from app.config import get_settings
-from app.schemas.common import Citation
+from app.schemas.common import Citation, ClaimType
 from app.schemas.intake import FeasibilityInput
 from app.schemas.market import CompetitiveAnalysisOutput, MarketSizingOutput
 from app.schemas.report import FinancialModelOutput, LocalizedText
@@ -32,11 +32,19 @@ class _RiskLLMEntry(BaseModel):
     impact: Literal["high", "medium", "low"]
     mitigation: str
     citation_index: int | None = None  # 0-based index into search results, or null
+    # <=25 words. State the basis plainly: a cited source's specific claim, a
+    # founder-stated concern, or analyst judgment — never claim a citation you
+    # did not select as citation_index.
+    methodology: str
 
 
 class _RiskLLMOutput(BaseModel):
     risks: list[_RiskLLMEntry]   # 5–8 risks across all categories
     narrative: str               # risk overview text in output_language
+
+
+def _classify_risk(citations: list[Citation]) -> ClaimType:
+    return ClaimType.VERIFIED_FACT if citations else ClaimType.OPINION
 
 
 def _fmt_market(m: MarketSizingOutput | None) -> str:
@@ -110,24 +118,18 @@ class RiskAssessmentAgent:
         model_type = fi.business_model_type.value or "business"
         founder_risks = fi.founder_risks.value or "none stated"
 
-        # ── 1 regulatory/sector risk search ──────────────────────────────────
-        reg_query = f"{model_type} startup regulatory compliance risks {geo} 2024 2025"
-        all_results: list[SearchResult] = []
-        search_queries: list[str] = [reg_query]
+        # ── Regulatory, market, and financial risk searches (concurrent) ──────
+        search_queries: list[str] = [
+            f"{model_type} startup regulatory compliance risks {geo} 2024 2025",
+            f"{biz} {model_type} business risks challenges {geo} market entry barriers",
+            f"{model_type} startup failure reasons funding risk {geo} 2024 2025",
+        ]
+        if founder_risks != "none stated":
+            search_queries.append(f"{founder_risks} risk mitigation {model_type} {geo}")
 
-        try:
-            results = await search_with_sse(
-                queue, fi.study_id, _AGENT, reg_query,
-                self._settings.tavily_api_key, max_results=5,
-            )
-            all_results.extend(results)
-        except Exception as exc:
-            logger.warning("Risk search failed: %s", exc)
-            await queue.put(
-                SSEEvent.AGENT_WARNING,
-                {"agent": _AGENT, "study_id": fi.study_id,
-                 "warning": f"Regulatory search failed — proceeding without web data: {exc}"},
-            )
+        all_results: list[SearchResult] = await gather_searches_with_sse(
+            queue, fi.study_id, _AGENT, search_queries, self._settings.tavily_api_key, max_results=5,
+        )
 
         results_context = (
             "\n\n".join(
@@ -158,6 +160,12 @@ class RiskAssessmentAgent:
                             "and write a specific, actionable mitigation step.\n"
                             "Use citation_index (0-based) to reference search results "
                             "where they support a specific risk finding; null if not applicable.\n"
+                            "For each risk, also write a `methodology` sentence (<=25 words) stating "
+                            "the basis: 'Cited result [i] specifically states ...' (naming what it "
+                            "says, not just 'see source [i]'), 'Reflects founder-stated concern', or "
+                            f"'Analyst judgment based on typical risk patterns in {geo}' when neither a "
+                            "citation nor a founder statement applies. Never claim a citation you did "
+                            "not select as citation_index.\n"
                             f"Write ALL text in language: {fi.output_language}.\n"
                             f"{ENGLISH_ONLY_TERMS_NOTE}\n"
                             "Consider: null SAM/SOM = market size uncertainty is itself a risk.\n"
@@ -181,28 +189,31 @@ class RiskAssessmentAgent:
         except Exception as exc:
             raise AgentSoftError(f"Risk assessment LLM call failed: {exc}") from exc
 
-        # ── 4 Resolve citations ────────────────────────────────────────────────
+        # ── 4 Resolve citations (per-entry, plus a deduped aggregate) ──────────
         seen_urls: set[str] = set()
         citations: list[Citation] = []
+        risk_entries: list[RiskEntry] = []
         for entry in llm_out.risks:
+            entry_cits: list[Citation] = []
             idx = entry.citation_index
             if idx is not None and 0 <= idx < len(all_results):
                 r = all_results[idx]
+                entry_cits = [Citation(url=r.url, title=r.title, snippet=r.snippet)]
                 if r.url not in seen_urls:
-                    citations.append(Citation(url=r.url, title=r.title, snippet=r.snippet))
+                    citations.append(entry_cits[0])
                     seen_urls.add(r.url)
-
-        # ── 5 Assemble output ──────────────────────────────────────────────────
-        risk_entries = [
-            RiskEntry(
-                risk_description=e.risk_description,
-                category=RiskCategory(e.category),
-                probability=RiskLevel(e.probability),
-                impact=RiskLevel(e.impact),
-                mitigation=e.mitigation,
+            risk_entries.append(
+                RiskEntry(
+                    risk_description=entry.risk_description,
+                    category=RiskCategory(entry.category),
+                    probability=RiskLevel(entry.probability),
+                    impact=RiskLevel(entry.impact),
+                    mitigation=entry.mitigation,
+                    citations=entry_cits,
+                    claim_type=_classify_risk(entry_cits),
+                    methodology=entry.methodology,
+                )
             )
-            for e in llm_out.risks
-        ]
         high_critical = sum(
             1 for r in risk_entries
             if r.probability == RiskLevel.HIGH and r.impact == RiskLevel.HIGH

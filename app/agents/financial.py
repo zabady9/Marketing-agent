@@ -16,12 +16,15 @@ from app.schemas.report import (
 )
 from app.sse import EventQueue, SSEEvent
 from app.tools.financial_calc import (
+    CALC_METHODOLOGY,
     BreakEvenInput,
     CashFlowInput,
+    CostStructureInput,
     NPVInput,
     ROIInput,
     SensitivityInput,
     calculate_break_even,
+    calculate_cost_structure,
     calculate_npv,
     calculate_roi,
     project_cash_flow,
@@ -53,7 +56,10 @@ async def _emit_calc(
 ) -> CalcTrace:
     """Emit calc_started → calc_completed and return the CalcTrace."""
     await queue.put(SSEEvent.CALC_STARTED, {"study_id": study_id, "fn": fn, "inputs": inputs})
-    trace = CalcTrace(fn=fn, inputs=inputs, output=output, input_confidence=conf)
+    trace = CalcTrace(
+        fn=fn, inputs=inputs, output=output, input_confidence=conf,
+        methodology=CALC_METHODOLOGY.get(fn, ""),
+    )
     await queue.put(
         SSEEvent.CALC_COMPLETED,
         {"study_id": study_id, "fn": fn, "output": output, "input_confidence": conf},
@@ -186,10 +192,20 @@ class FinancialModelingAgent:
         cf_trace = await _emit_calc(queue, fi.study_id, "project_cash_flow",
                                     cf_inputs, cf_output, cf_conf)
 
+        # 2g. Cost structure (Capex vs. cumulative Opex over the horizon)
+        cs_inputs = dict(capex=capex, opex_monthly=opex_monthly, horizon_months=horizon_months)
+        try:
+            cs_output = calculate_cost_structure(CostStructureInput(**cs_inputs))
+        except Exception as exc:
+            raise FinancialCalcError(f"calculate_cost_structure failed: {exc}") from exc
+        cs_conf = _confidence(fi, "capex", "opex_monthly")
+        cs_trace = await _emit_calc(queue, fi.study_id, "calculate_cost_structure",
+                                    cs_inputs, cs_output, cs_conf)
+
         # ── 3. LLM generates narrative only — no numbers ──────────────────────
         any_low = any(
             t.input_confidence == "low"
-            for t in [be_trace, roi1_trace, roin_trace, npv_trace, sens_trace, cf_trace]
+            for t in [be_trace, roi1_trace, roin_trace, npv_trace, sens_trace, cf_trace, cs_trace]
         )
 
         class _Narrative(BaseModel):
@@ -286,6 +302,11 @@ class FinancialModelingAgent:
                 value=cf_output,
                 calculation_trace=cf_trace,
                 input_confidence=cf_conf,
+            ),
+            cost_structure=CalculatedFigure(
+                value=cs_output,
+                calculation_trace=cs_trace,
+                input_confidence=cs_conf,
             ),
             narrative=narrative,
             review_recommended=any_low,

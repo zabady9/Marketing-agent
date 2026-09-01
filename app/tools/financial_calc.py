@@ -54,6 +54,12 @@ class CashFlowInput(BaseModel):
     horizon_months: int = Field(..., description="Projection horizon in months")
 
 
+class CostStructureInput(BaseModel):
+    capex: float = Field(..., description="One-time capital expenditure")
+    opex_monthly: float = Field(..., description="Monthly operating expenses")
+    horizon_months: int = Field(..., description="Analysis horizon in months")
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Pure calculation functions
 # ──────────────────────────────────────────────────────────────────────────────
@@ -175,6 +181,56 @@ def project_cash_flow(inp: CashFlowInput) -> dict[str, Any]:
     }
 
 
+def calculate_cost_structure(inp: CostStructureInput) -> dict[str, Any]:
+    """
+    Cost structure over the analysis horizon: one-time Capex vs. cumulative
+    Opex (monthly Opex × horizon months).
+    """
+    cumulative_opex = round(inp.opex_monthly * inp.horizon_months, 2)
+    return {
+        "capex": round(inp.capex, 2),
+        "cumulative_opex": cumulative_opex,
+        "total_cost": round(inp.capex + cumulative_opex, 2),
+        "horizon_months": inp.horizon_months,
+    }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Methodology text — one plain-language sentence per function, keyed by name.
+# Deterministic and static (no LLM), so it's correct by construction: it's a
+# direct restatement of the formula each function actually runs above. Consumed
+# by app/agents/financial.py::_emit_calc to populate CalcTrace.methodology.
+# ──────────────────────────────────────────────────────────────────────────────
+
+CALC_METHODOLOGY: dict[str, str] = {
+    "calculate_break_even": (
+        "Break-even units = fixed costs ÷ (unit price − variable cost per unit); "
+        "break-even months = break-even units ÷ expected monthly unit sales."
+    ),
+    "calculate_roi": (
+        "ROI % = net profit ÷ total investment × 100, using capex as the "
+        "investment and (monthly revenue − monthly opex) × 12 × years − capex "
+        "as net profit."
+    ),
+    "calculate_npv": (
+        "NPV = Σ (annual cash flow ÷ (1 + discount rate)^year) − initial "
+        "investment, at a 10% annual discount rate."
+    ),
+    "run_sensitivity_analysis": (
+        "Break-even recomputed at 0.7×, 1.0×, 1.3× base monthly sales to model "
+        "pessimistic / base / optimistic demand scenarios."
+    ),
+    "project_cash_flow": (
+        "Cumulative cash position by month = −capex at month 0, then + "
+        "(monthly revenue − monthly opex) each subsequent month."
+    ),
+    "calculate_cost_structure": (
+        "Cumulative Opex = monthly Opex × horizon months; shown alongside "
+        "one-time Capex to compare cost structure."
+    ),
+}
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # LangChain StructuredTool registry
 # (imported by FinancialModelingAgent in Phase 3)
@@ -231,5 +287,14 @@ def get_financial_tools():
                 "Returns cumulative cash position per month and payback month."
             ),
             args_schema=CashFlowInput,
+        ),
+        StructuredTool.from_function(
+            func=lambda **kw: calculate_cost_structure(CostStructureInput(**kw)),
+            name="calculate_cost_structure",
+            description=(
+                "Compare one-time Capex against cumulative Opex over the "
+                "analysis horizon."
+            ),
+            args_schema=CostStructureInput,
         ),
     ]

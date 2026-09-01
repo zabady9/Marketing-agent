@@ -17,6 +17,22 @@ Tier B  (faithfulness-checked via CHEAP_MODEL back-check; no URL required):
 Tier C  (pipeline-verifiable, pure Python, no LLM):
     data_gaps             — each reported gap verified against actual null fields in outputs
 
+Tier D  (structural consistency, pure Python, no LLM):
+    claim_type tags on TAM/SAM/SOM/CAGR, competitor profiles, and risk entries —
+    verified_fact must carry a resolved citation; unavailable must carry no value.
+    Catches internal inconsistency, not "is this the *right* category" — that
+    remains a human-review question the per-claim methodology text supports.
+
+Tier E  (citation relevance, CHEAP_MODEL back-check):
+    Every verified_fact claim (TAM/SAM/SOM/CAGR, competitor profiles, risk
+    entries) — does its resolved citation actually support THIS specific
+    claim, not just resolve to *a* search result? A citation about a
+    same-named but different company, or an off-topic result, fails this
+    check. Failing items are downgraded in place: market figures ->
+    value=null/unavailable (per the "no ungrounded number" HARD RULE already
+    applied elsewhere in market_overview); competitors/risks -> opinion with
+    citations cleared. The methodology field is overwritten to explain why.
+
 Out of scope:
     key_opportunities     — strategic recommendations, not falsifiable factual claims
     rationale             — qualitative verdict reasoning; implicitly covered by exec_summary check
@@ -32,6 +48,7 @@ from pydantic import BaseModel
 
 from app.agents.base import AgentName
 from app.config import get_settings
+from app.schemas.common import Citation, ClaimType
 from app.schemas.intake import FeasibilityInput
 from app.schemas.market import CompetitiveAnalysisOutput, MarketSizingOutput
 from app.schemas.qc import CitationQCOutput, QCFlag, QCIssue, QCSeverity
@@ -61,6 +78,16 @@ COVERAGE_MANIFEST: dict[str, list[str]] = {
     ],
     "tier_c_pipeline_verifiable": [
         "data_gaps (each reported gap vs. actual null fields in pipeline outputs)",
+    ],
+    "tier_d_classification_consistency": [
+        "market_overview (TAM, SAM, SOM, CAGR claim_type vs. value/citations)",
+        "competitive_landscape (each competitor's claim_type vs. citations)",
+        "risk_assessment (each risk's claim_type vs. citations)",
+    ],
+    "tier_e_citation_relevance": [
+        "market_overview (TAM, SAM, SOM, CAGR — citation vs. this specific figure)",
+        "competitive_landscape (each verified_fact competitor — citation(s) vs. this specific profile)",
+        "risk_assessment (each verified_fact risk — citation vs. this specific risk)",
     ],
     "out_of_scope": [
         "key_opportunities (strategic recommendations, not falsifiable claims)",
@@ -182,6 +209,74 @@ def _verify_data_gaps(
     return flags
 
 
+# ── Tier D helpers (pure Python) ──────────────────────────────────────────────
+
+def _check_claim_type(
+    section: str, label: str, claim_type, has_value: bool, has_citation: bool,
+) -> QCFlag | None:
+    if claim_type == ClaimType.VERIFIED_FACT and not has_citation:
+        return QCFlag(
+            section=section,
+            claim=label[:120],
+            issue=QCIssue.CLASSIFICATION_MISMATCH,
+            severity=QCSeverity.WARNING,
+            detail=f"{label} is tagged verified_fact but carries no resolved citation.",
+        )
+    if claim_type == ClaimType.UNAVAILABLE and has_value:
+        return QCFlag(
+            section=section,
+            claim=label[:120],
+            issue=QCIssue.CLASSIFICATION_MISMATCH,
+            severity=QCSeverity.WARNING,
+            detail=f"{label} is tagged unavailable but a value is present.",
+        )
+    return None
+
+
+def _verify_claim_types(
+    market: MarketSizingOutput | None,
+    competitive: CompetitiveAnalysisOutput | None,
+    risk: RiskAssessmentOutput | None,
+) -> list[QCFlag]:
+    """Tier D: verify claim_type tags are internally consistent with the
+    citations/value they describe. Does NOT verify the LLM chose the *right*
+    category — only that verified_fact/unavailable aren't self-contradictory."""
+    flags: list[QCFlag] = []
+
+    if market is not None:
+        checks = [
+            ("TAM", market.tam.claim_type, market.tam.value is not None, bool(market.tam.citations)),
+            ("SAM", market.sam.claim_type, market.sam.value is not None, bool(market.sam.citations)),
+            ("SOM", market.som.claim_type, market.som.value is not None, bool(market.som.citations)),
+            (
+                "CAGR", market.growth_rate_claim_type,
+                market.growth_rate_cagr is not None, bool(market.growth_rate_citations),
+            ),
+        ]
+        for label, claim_type, has_value, has_citation in checks:
+            flag = _check_claim_type("market_overview", label, claim_type, has_value, has_citation)
+            if flag:
+                flags.append(flag)
+
+    if competitive is not None:
+        for c in competitive.competitors:
+            flag = _check_claim_type(
+                "competitive_landscape", f"competitor:{c.name}", c.claim_type, True, bool(c.citations),
+            )
+            if flag:
+                flags.append(flag)
+
+    if risk is not None:
+        for r in risk.risks:
+            flag = _check_claim_type(
+                "risk_assessment", f"risk:{r.risk_description[:40]}", r.claim_type, True, bool(r.citations),
+            )
+            if flag:
+                flags.append(flag)
+
+    return flags
+
+
 # ── Tier B LLM schemas ─────────────────────────────────────────────────────────
 
 class _FaithfulnessItem(BaseModel):
@@ -203,6 +298,26 @@ class _ContradictionCheck(BaseModel):
 
 class _ContradictionReport(BaseModel):
     checks: list[_ContradictionCheck]
+
+
+class _RelevanceItem(BaseModel):
+    item_id: str          # matches the id the check was submitted under
+    is_relevant: bool      # does the citation genuinely support THIS claim?
+    issue: str | None      # if not relevant, one sentence on the mismatch
+
+
+class _RelevanceReport(BaseModel):
+    items: list[_RelevanceItem]
+
+
+_UNGROUNDED_MARKET_METHODOLOGY = (
+    "Value withdrawn — a citation-relevance check found the cited source does "
+    "not actually support this figure."
+)
+_UNGROUNDED_ENTITY_METHODOLOGY = (
+    "Downgraded to opinion — a citation-relevance check found the cited "
+    "source does not actually describe this entry."
+)
 
 
 class CitationValidationAgent:
@@ -437,6 +552,157 @@ class CitationValidationAgent:
 
         return flags, all_accurate
 
+    # ── Tier E: citation relevance (batched cheap-model back-check) ────────────
+
+    @staticmethod
+    def _cite_text(citations: list[Citation]) -> str:
+        return " | ".join(f"{c.title}: {c.snippet}" for c in citations) or "[no citation text]"
+
+    async def _check_citation_relevance(
+        self,
+        market: MarketSizingOutput | None,
+        competitive: CompetitiveAnalysisOutput | None,
+        risk: RiskAssessmentOutput | None,
+    ) -> list[QCFlag]:
+        """For every verified_fact claim, ask whether its resolved citation(s)
+        actually support THIS specific claim — not just resolve topically.
+        Failing items are downgraded IN PLACE (mutates the output objects
+        passed in) before to_sections_payload() is built downstream. The live
+        SECTION_READY SSE event for that section already fired earlier in the
+        pipeline and can't be retracted — same documented limitation as
+        executive_summary_trusted below."""
+        flags: list[QCFlag] = []
+        items: list[dict] = []
+
+        if market is not None:
+            for key, label in [("tam", "TAM"), ("sam", "SAM"), ("som", "SOM")]:
+                figure = getattr(market, key)
+                if figure.claim_type == ClaimType.VERIFIED_FACT:
+                    items.append({
+                        "item_id": f"market:{key}",
+                        "claim_text": f"{label} = {figure.value} {figure.unit}. Methodology: {figure.methodology}",
+                        "citation_text": self._cite_text(figure.citations),
+                    })
+            if market.growth_rate_claim_type == ClaimType.VERIFIED_FACT:
+                items.append({
+                    "item_id": "market:cagr",
+                    "claim_text": f"CAGR = {market.growth_rate_cagr}%. Methodology: {market.growth_rate_methodology}",
+                    "citation_text": self._cite_text(market.growth_rate_citations),
+                })
+
+        if competitive is not None:
+            for i, c in enumerate(competitive.competitors):
+                if c.claim_type == ClaimType.VERIFIED_FACT:
+                    items.append({
+                        "item_id": f"competitor:{i}",
+                        "claim_text": (
+                            f"Competitor profile for '{c.name}': strengths={c.strengths}, "
+                            f"weaknesses={c.weaknesses}. Methodology: {c.methodology}"
+                        ),
+                        "citation_text": self._cite_text(c.citations),
+                    })
+
+        if risk is not None:
+            for i, r in enumerate(risk.risks):
+                if r.claim_type == ClaimType.VERIFIED_FACT:
+                    items.append({
+                        "item_id": f"risk:{i}",
+                        "claim_text": f"Risk: {r.risk_description}. Methodology: {r.methodology}",
+                        "citation_text": self._cite_text(r.citations),
+                    })
+
+        if not items:
+            return flags
+
+        items_text = "\n\n".join(
+            f"[{it['item_id']}]\nClaim: {it['claim_text']}\nCitation content: {it['citation_text']}"
+            for it in items
+        )
+
+        structured_llm = self._llm.with_structured_output(_RelevanceReport)
+        try:
+            report: _RelevanceReport = await structured_llm.ainvoke(
+                [
+                    SystemMessage(
+                        content=(
+                            "You are a skeptical QC auditor checking whether a citation "
+                            "genuinely supports a specific claim in a feasibility report — "
+                            "not just whether it's topically related to the same industry. "
+                            "Default to is_relevant=false unless the citation content "
+                            "clearly and specifically supports THIS claim about THIS named "
+                            "entity.\n"
+                            "The 'Methodology' text inside each claim was written by the "
+                            "same model that selected the citation — if it admits a "
+                            "mismatch (different company, different city/country, "
+                            "different industry, hedges with words like 'not', 'while', "
+                            "'however', 'despite', or otherwise concedes the citation is "
+                            "about something else), you MUST return is_relevant=false and "
+                            "quote the admission back in `issue`. Do not give the benefit "
+                            "of the doubt merely because the citation is in the same "
+                            "general industry — e.g. a citation about a same-named company "
+                            "in a different country, or an unrelated company entirely, is "
+                            "NOT relevant even if both are 'coffee' or 'tech' businesses.\n"
+                            "Example — irrelevant: claim is about competitor 'Toucano' in "
+                            "Cairo; methodology says 'result [4] places Tucano Coffee in "
+                            "Turkey' -> is_relevant=false, issue='Cited source describes a "
+                            "Turkey-based business, not the named Cairo competitor.'\n"
+                            "Return exactly one item per item_id given."
+                        )
+                    ),
+                    HumanMessage(content=f"Items to verify ({len(items)} total):\n\n{items_text}"),
+                ]
+            )
+        except Exception as exc:
+            logger.warning("Citation relevance check LLM call failed: %s", exc)
+            return flags
+
+        verdicts = {item.item_id: item for item in report.items}
+
+        for it in items:
+            verdict = verdicts.get(it["item_id"])
+            if verdict is None or verdict.is_relevant:
+                continue
+
+            item_id = it["item_id"]
+            detail = verdict.issue or "Citation does not support this specific claim."
+
+            if item_id.startswith("market:"):
+                key = item_id.split(":", 1)[1]
+                if key == "cagr":
+                    market.growth_rate_cagr = None
+                    market.growth_rate_citations = []
+                    market.growth_rate_claim_type = ClaimType.UNAVAILABLE
+                    market.growth_rate_methodology = _UNGROUNDED_MARKET_METHODOLOGY
+                else:
+                    figure = getattr(market, key)
+                    figure.value = None
+                    figure.citations = []
+                    figure.claim_type = ClaimType.UNAVAILABLE
+                    figure.methodology = _UNGROUNDED_MARKET_METHODOLOGY
+                section = "market_overview"
+            elif item_id.startswith("competitor:"):
+                c = competitive.competitors[int(item_id.split(":", 1)[1])]
+                c.claim_type = ClaimType.OPINION
+                c.citations = []
+                c.methodology = _UNGROUNDED_ENTITY_METHODOLOGY
+                section = "competitive_landscape"
+            else:  # "risk:"
+                r = risk.risks[int(item_id.split(":", 1)[1])]
+                r.claim_type = ClaimType.OPINION
+                r.citations = []
+                r.methodology = _UNGROUNDED_ENTITY_METHODOLOGY
+                section = "risk_assessment"
+
+            flags.append(QCFlag(
+                section=section,
+                claim=it["claim_text"][:120],
+                issue=QCIssue.CITATION_RELEVANCE,
+                severity=QCSeverity.WARNING,
+                detail=detail,
+            ))
+
+        return flags
+
     # ── Main run ──────────────────────────────────────────────────────────────
 
     async def run(
@@ -546,10 +812,46 @@ class CitationValidationAgent:
                     },
                 )
 
+        # ── Tier D: Claim-type structural consistency ──────────────────────────
+        classification_flags = _verify_claim_types(market_output, competitive_output, risk_output)
+        for flag in classification_flags:
+            all_flags.append(flag)
+            await queue.put(
+                SSEEvent.QC_FLAG_RAISED,
+                {
+                    "study_id": fi.study_id,
+                    "section": flag.section,
+                    "issue": QCIssue.CLASSIFICATION_MISMATCH,
+                    "detail": flag.detail,
+                },
+            )
+
+        # ── Tier E: Citation relevance (mutates outputs in place on failure) ───
+        relevance_flags = await self._check_citation_relevance(
+            market_output, competitive_output, risk_output
+        )
+        for flag in relevance_flags:
+            all_flags.append(flag)
+            await queue.put(
+                SSEEvent.QC_FLAG_RAISED,
+                {
+                    "study_id": fi.study_id,
+                    "section": flag.section,
+                    "issue": QCIssue.CITATION_RELEVANCE,
+                    "detail": flag.detail,
+                },
+            )
+
         # ── Emit QC_COMPLETED ─────────────────────────────────────────────────
         flagged_sections = sorted({f.section for f in all_flags})
         faithfulness_issues = sum(1 for f in all_flags if f.issue == QCIssue.FAITHFULNESS)
         gap_mismatches = sum(1 for f in all_flags if f.issue == QCIssue.DATA_GAP_MISMATCH)
+        classification_mismatches = sum(
+            1 for f in all_flags if f.issue == QCIssue.CLASSIFICATION_MISMATCH
+        )
+        citation_relevance_issues = sum(
+            1 for f in all_flags if f.issue == QCIssue.CITATION_RELEVANCE
+        )
 
         # executive_summary_trusted = False when any ERROR-severity faithfulness flag
         # hit the executive_summary section. This is the downstream signal that lets
@@ -572,6 +874,8 @@ class CitationValidationAgent:
             contradictions_verified=contradictions_verified,
             contradictions_faithful=contradictions_faithful,
             data_gap_mismatches=gap_mismatches,
+            classification_mismatches=classification_mismatches,
+            citation_relevance_issues=citation_relevance_issues,
             flags=all_flags,
             flagged_sections=flagged_sections,
             total_flags=len(all_flags),
@@ -590,6 +894,8 @@ class CitationValidationAgent:
                 "contradictions_verified": output.contradictions_verified,
                 "contradictions_faithful": output.contradictions_faithful,
                 "data_gap_mismatches": output.data_gap_mismatches,
+                "classification_mismatches": output.classification_mismatches,
+                "citation_relevance_issues": output.citation_relevance_issues,
                 "total_flags": output.total_flags,
                 "flagged_sections": output.flagged_sections,
                 "coverage": output.coverage,

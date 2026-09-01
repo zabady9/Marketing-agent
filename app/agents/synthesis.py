@@ -239,7 +239,15 @@ class FeasibilitySynthesisAgent:
             f"3. PRE-COMPUTED CONFIDENCE SCORE = {conf_bd.final_score:.2f}\n"
             "   This number is deterministic and already correct (computed from citation\n"
             "   quality, risk severity, data completeness, and pipeline success rate).\n"
-            "   Reference it in your executive_summary. NEVER modify or override it."
+            "   Reference it in your executive_summary. NEVER modify or override it.\n"
+            "\n"
+            "4. CLAIM TYPE DISCIPLINE\n"
+            "   verdict, key_opportunities, key_risks, contradictions, and rationale are\n"
+            "   your qualitative judgment (\"opinion\" claims), not a channel for new numbers.\n"
+            "   Every figure you reference (TAM, SAM, SOM, CAGR, break-even, ROI, NPV,\n"
+            "   confidence score) MUST already appear in the sections above — never compute\n"
+            "   or estimate a new number here. If a number is [DATA UNAVAILABLE] above, say\n"
+            "   so explicitly rather than approximating it."
         )
 
         full_context = "\n\n".join([

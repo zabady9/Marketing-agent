@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from app.schemas.common import Citation
+from app.schemas.common import Citation, ClaimType
 from app.schemas.report import LocalizedText
 
 
@@ -30,6 +30,12 @@ class RiskEntry(BaseModel):
     probability: RiskLevel
     impact: RiskLevel
     mitigation: str         # concrete steps in output_language
+    # Per-entry citation — previously resolved by risk.py but discarded before
+    # reaching the output; now threaded through so individual risks are sourceable.
+    citations: list[Citation] = []
+    # Computed deterministically by the agent — see risk.py::_classify_risk.
+    claim_type: ClaimType = ClaimType.OPINION
+    methodology: str = ""
 
 
 class RiskAssessmentOutput(BaseModel):
@@ -40,3 +46,9 @@ class RiskAssessmentOutput(BaseModel):
     narrative: LocalizedText
     search_queries_used: list[str]
     citations: list[Citation]
+
+    claim_types: dict[str, ClaimType] = {
+        # Pure-Python count over already-classified risks, not an LLM guess.
+        "high_critical_count": ClaimType.CALCULATED_ESTIMATE,
+        "narrative": ClaimType.OPINION,
+    }

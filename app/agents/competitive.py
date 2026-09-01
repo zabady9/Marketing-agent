@@ -7,8 +7,9 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel
 
-from app.agents.base import AgentName, AgentSoftError, search_with_sse
+from app.agents.base import AgentName, AgentSoftError, gather_searches_with_sse
 from app.config import get_settings
+from app.schemas.common import ClaimType
 from app.schemas.intake import FeasibilityInput
 from app.schemas.market import (
     Citation,
@@ -33,6 +34,10 @@ class _CompetitorLLMOutput(BaseModel):
     strengths: list[str]   # in output_language
     weaknesses: list[str]  # in output_language
     citation_indices: list[int] = []  # 0-based indices into flat results list
+    # <=25 words. Must name what the cited result specifically says about this
+    # competitor (not just "see source [i]") — or say plainly that this is
+    # analyst inference with no direct source.
+    methodology: str
 
 
 class _CompetitiveLLMOutput(BaseModel):
@@ -54,6 +59,12 @@ def _resolve_citations(
                 out.append(Citation(url=r.url, title=r.title, snippet=r.snippet))
                 seen.add(r.url)
     return out
+
+
+def _classify_competitor(source: str, citations: list[Citation]) -> ClaimType:
+    if citations:
+        return ClaimType.VERIFIED_FACT
+    return ClaimType.ASSUMPTION if source == "user_provided" else ClaimType.OPINION
 
 
 class CompetitiveAnalysisAgent:
@@ -79,27 +90,21 @@ class CompetitiveAnalysisAgent:
         # ── Build queries ─────────────────────────────────────────────────────
         queries: list[str] = [
             f"top {biz} {model_type} competitors {geo} market leaders 2024",
+            # Listicle/review-site content tends to be richer in concrete
+            # strengths/weaknesses than a generic "top competitors" query.
+            f"best {model_type} companies {geo} 2025 comparison",
         ]
         # Targeted lookups for user-provided competitors (cap at 3 to limit Tavily calls)
         for name in user_competitors[:3]:
             queries.append(f"{name} {model_type} features pricing strengths weaknesses")
+        # Market-share framing helps ground market_position (leader/challenger/niche).
+        queries.append(f"{biz} {model_type} market share {geo} key players 2024 2025")
 
-        # ── Fire searches with SSE events ────────────────────────────────────
-        all_results: list[SearchResult] = []
-        for query in queries:
-            try:
-                results = await search_with_sse(
-                    queue, fi.study_id, _AGENT, query,
-                    self._settings.tavily_api_key, max_results=5,
-                )
-                all_results.extend(results)
-            except Exception as exc:
-                logger.warning("Competitive search failed for %r: %s", query, exc)
-                await queue.put(
-                    SSEEvent.AGENT_WARNING,
-                    {"agent": _AGENT, "study_id": fi.study_id,
-                     "warning": f"Search failed: {exc}"},
-                )
+        # ── Fire all searches concurrently (semaphore(2) still throttles the
+        # actual Tavily request rate) ─────────────────────────────────────────
+        all_results: list[SearchResult] = await gather_searches_with_sse(
+            queue, fi.study_id, _AGENT, queries, self._settings.tavily_api_key, max_results=5,
+        )
 
         if not all_results:
             raise AgentSoftError(
@@ -133,6 +138,13 @@ class CompetitiveAnalysisAgent:
                             "3. Identify what makes the user's business concept different "
                             "(key_differentiators).\n"
                             "4. Identify market gaps or underserved niches (market_gaps).\n"
+                            "5. For each competitor, write a `methodology` sentence (<=25 words) "
+                            "naming WHAT the cited result specifically says (e.g. 'Cited result [i] "
+                            "describes their pricing and lack of a subscription tier') — a reviewer "
+                            "must be able to check the citation actually supports this profile. If no "
+                            "citation applies, say so plainly, e.g. 'No cited result covers this "
+                            "competitor; profile is inferred from general category knowledge.' Do not "
+                            "claim a source you did not select as citation_indices.\n"
                             "Cite sources using citation_indices (0-based indices into results).\n"
                             f"Write ALL text fields in language: {fi.output_language}.\n"
                             f"{ENGLISH_ONLY_TERMS_NOTE}"
@@ -173,6 +185,8 @@ class CompetitiveAnalysisAgent:
                     strengths=comp.strengths,
                     weaknesses=comp.weaknesses,
                     citations=cits,
+                    claim_type=_classify_competitor(source, cits),
+                    methodology=comp.methodology,
                 )
             )
             for c in cits:
