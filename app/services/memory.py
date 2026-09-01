@@ -5,6 +5,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from app.models import MemoryEntry
+from app.schemas.admin import MemoryEntryAdminUpdate
 
 
 def list_memory_entries(db: Session) -> list[MemoryEntry]:
@@ -33,3 +34,46 @@ def delete_memory_entry(db: Session, memory_id: str) -> bool:
     entry.deleted_at = datetime.utcnow()
     db.commit()
     return True
+
+
+# ── Admin ──────────────────────────────────────────────────────────────────
+
+
+def list_memory_entries_admin(
+    db: Session, *, limit: int, offset: int, include_deleted: bool
+) -> tuple[list[MemoryEntry], int]:
+    query = db.query(MemoryEntry)
+    if not include_deleted:
+        query = query.filter(MemoryEntry.deleted_at.is_(None))
+    total = query.count()
+    items = query.order_by(MemoryEntry.created_at.desc()).offset(offset).limit(limit).all()
+    return items, total
+
+
+def get_memory_entry_admin(db: Session, memory_id: str) -> MemoryEntry | None:
+    return db.query(MemoryEntry).filter_by(id=memory_id).one_or_none()
+
+
+def update_memory_entry(
+    db: Session, entry: MemoryEntry, patch: MemoryEntryAdminUpdate
+) -> MemoryEntry:
+    data = patch.model_dump(exclude_unset=True)
+    for field, value in data.items():
+        setattr(entry, field, value)
+    db.commit()
+    db.refresh(entry)
+    return entry
+
+
+def soft_delete_memory_entry(db: Session, entry: MemoryEntry) -> MemoryEntry:
+    entry.deleted_at = datetime.utcnow()
+    db.commit()
+    db.refresh(entry)
+    return entry
+
+
+def restore_memory_entry(db: Session, entry: MemoryEntry) -> MemoryEntry:
+    entry.deleted_at = None
+    db.commit()
+    db.refresh(entry)
+    return entry

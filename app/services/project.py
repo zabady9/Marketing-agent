@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.agents.intake import IntakeFeasibilityAgent
 from app.models import BusinessProfile, Project
+from app.schemas.admin import ProjectAdminResponse, ProjectAdminUpdate
 from app.schemas.intake import FeasibilityInput, FeasibilityStartRequest, Source
 from app.schemas.project import BusinessProfileResponse, BusinessProfileUpdate, SourcedValue
 from app.sse import EventQueue
@@ -151,6 +152,101 @@ def get_business_profile(db: Session, project_id: str) -> BusinessProfile | None
         .filter(BusinessProfile.project_id == project_id, BusinessProfile.deleted_at.is_(None))
         .one_or_none()
     )
+
+
+# ── Admin ──────────────────────────────────────────────────────────────────
+
+
+def list_projects_admin(
+    db: Session,
+    *,
+    limit: int,
+    offset: int,
+    include_deleted: bool,
+    status: str | None = None,
+) -> tuple[list[Project], int]:
+    query = db.query(Project)
+    if not include_deleted:
+        query = query.filter(Project.deleted_at.is_(None))
+    if status is not None:
+        query = query.filter(Project.status == status)
+    total = query.count()
+    items = query.order_by(Project.created_at.desc()).offset(offset).limit(limit).all()
+    return items, total
+
+
+def get_project_admin(db: Session, project_id: str) -> Project | None:
+    """Ignores deleted_at — an admin must be able to open a soft-deleted
+    project in order to restore it."""
+    return db.query(Project).filter_by(id=project_id).one_or_none()
+
+
+def project_to_admin_response(project: Project) -> ProjectAdminResponse:
+    active_study_count = sum(1 for s in project.study_results if s.deleted_at is None)
+    active_chat_session_count = sum(1 for s in project.chat_sessions if s.deleted_at is None)
+    return ProjectAdminResponse(
+        id=project.id,
+        name=project.name,
+        status=project.status,
+        deleted_at=project.deleted_at,
+        created_at=project.created_at,
+        updated_at=project.updated_at,
+        active_study_count=active_study_count,
+        active_chat_session_count=active_chat_session_count,
+    )
+
+
+def update_project(db: Session, project: Project, patch: ProjectAdminUpdate) -> Project:
+    data = patch.model_dump(exclude_unset=True)
+    for field, value in data.items():
+        setattr(project, field, value)
+    db.commit()
+    db.refresh(project)
+    return project
+
+
+def soft_delete_project(db: Session, project: Project) -> Project:
+    """Cascades to the project's BusinessProfile, StudyResults, ChatSessions,
+    and their ChatMessages — but only children not already independently
+    soft-deleted, so a prior standalone delete keeps its own timestamp."""
+    now = datetime.utcnow()
+    project.deleted_at = now
+    if project.business_profile is not None and project.business_profile.deleted_at is None:
+        project.business_profile.deleted_at = now
+    for study in project.study_results:
+        if study.deleted_at is None:
+            study.deleted_at = now
+    for session in project.chat_sessions:
+        if session.deleted_at is None:
+            session.deleted_at = now
+        for message in session.messages:
+            if message.deleted_at is None:
+                message.deleted_at = now
+    db.commit()
+    db.refresh(project)
+    return project
+
+
+def restore_project(db: Session, project: Project) -> Project:
+    """Inverse of soft_delete_project: restores only children whose
+    deleted_at exactly matches the project's own — a child deleted
+    independently before the project-level delete stays deleted."""
+    previous = project.deleted_at
+    project.deleted_at = None
+    if project.business_profile is not None and project.business_profile.deleted_at == previous:
+        project.business_profile.deleted_at = None
+    for study in project.study_results:
+        if study.deleted_at == previous:
+            study.deleted_at = None
+    for session in project.chat_sessions:
+        if session.deleted_at == previous:
+            session.deleted_at = None
+        for message in session.messages:
+            if message.deleted_at == previous:
+                message.deleted_at = None
+    db.commit()
+    db.refresh(project)
+    return project
 
 
 def business_profile_to_response(profile: BusinessProfile) -> BusinessProfileResponse:

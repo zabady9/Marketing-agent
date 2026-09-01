@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.models.glossary_cache import GlossaryCache
+from app.schemas.admin import GlossaryCacheAdminUpdate
 
 logger = logging.getLogger(__name__)
 
@@ -121,3 +122,44 @@ async def get_or_create_glossary(db: Session, output_language: str) -> dict[str,
         db.add(GlossaryCache(language=base_lang, terms=translated))
     db.commit()
     return translated
+
+
+# ── Admin ──────────────────────────────────────────────────────────────────
+
+
+def list_glossary_cache_admin(
+    db: Session, *, limit: int, offset: int, include_deleted: bool
+) -> tuple[list[GlossaryCache], int]:
+    query = db.query(GlossaryCache)
+    if not include_deleted:
+        query = query.filter(GlossaryCache.deleted_at.is_(None))
+    total = query.count()
+    items = query.order_by(GlossaryCache.language).offset(offset).limit(limit).all()
+    return items, total
+
+
+def get_glossary_cache_admin(db: Session, language: str) -> GlossaryCache | None:
+    return db.get(GlossaryCache, language)
+
+
+def update_glossary_terms(
+    db: Session, cache: GlossaryCache, patch: GlossaryCacheAdminUpdate
+) -> GlossaryCache:
+    cache.terms = patch.terms
+    db.commit()
+    db.refresh(cache)
+    return cache
+
+
+def soft_delete_glossary_cache(db: Session, cache: GlossaryCache) -> GlossaryCache:
+    cache.deleted_at = datetime.utcnow()
+    db.commit()
+    db.refresh(cache)
+    return cache
+
+
+def restore_glossary_cache(db: Session, cache: GlossaryCache) -> GlossaryCache:
+    cache.deleted_at = None
+    db.commit()
+    db.refresh(cache)
+    return cache

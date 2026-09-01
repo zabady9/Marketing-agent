@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.models import BusinessProfile, Project, StudyResult
 from app.orchestrator import run_feasibility_pipeline
+from app.schemas.admin import StudyResultAdminCreate, StudyResultAdminUpdate
 from app.schemas.intake import FeasibilityInput, FieldWithSource, Source
 from app.services.glossary import get_or_create_glossary
 from app.sse import EventQueue, SSEEvent
@@ -180,3 +181,78 @@ def list_study_results(db: Session, project: Project) -> list[StudyResult]:
         .order_by(StudyResult.created_at.desc())
         .all()
     )
+
+
+# ── Admin ──────────────────────────────────────────────────────────────────
+
+
+def list_study_results_admin(
+    db: Session,
+    *,
+    limit: int,
+    offset: int,
+    include_deleted: bool,
+    project_id: str | None = None,
+    status: str | None = None,
+    verdict: str | None = None,
+) -> tuple[list[StudyResult], int]:
+    query = db.query(StudyResult)
+    if not include_deleted:
+        query = query.filter(StudyResult.deleted_at.is_(None))
+    if project_id is not None:
+        query = query.filter(StudyResult.project_id == project_id)
+    if status is not None:
+        query = query.filter(StudyResult.status == status)
+    if verdict is not None:
+        query = query.filter(StudyResult.verdict == verdict)
+    total = query.count()
+    items = query.order_by(StudyResult.created_at.desc()).offset(offset).limit(limit).all()
+    return items, total
+
+
+def get_study_result_admin(db: Session, study_id: str) -> StudyResult | None:
+    return db.query(StudyResult).filter_by(id=study_id).one_or_none()
+
+
+def create_study_result_admin(db: Session, payload: StudyResultAdminCreate) -> StudyResult:
+    study = StudyResult(
+        project_id=payload.project_id,
+        status=payload.status,
+        sections=payload.sections,
+        verdict=payload.verdict,
+        confidence_score=payload.confidence_score,
+        qc_summary=payload.qc_summary,
+        fatal_agent_failures=payload.fatal_agent_failures,
+        error=payload.error,
+        started_at=payload.started_at,
+        completed_at=payload.completed_at,
+    )
+    db.add(study)
+    db.commit()
+    db.refresh(study)
+    return study
+
+
+def update_study_result(
+    db: Session, study: StudyResult, patch: StudyResultAdminUpdate
+) -> StudyResult:
+    data = patch.model_dump(exclude_unset=True)
+    for field, value in data.items():
+        setattr(study, field, value)
+    db.commit()
+    db.refresh(study)
+    return study
+
+
+def soft_delete_study_result(db: Session, study: StudyResult) -> StudyResult:
+    study.deleted_at = datetime.utcnow()
+    db.commit()
+    db.refresh(study)
+    return study
+
+
+def restore_study_result(db: Session, study: StudyResult) -> StudyResult:
+    study.deleted_at = None
+    db.commit()
+    db.refresh(study)
+    return study
