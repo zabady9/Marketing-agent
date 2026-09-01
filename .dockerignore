@@ -1,0 +1,16 @@
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.git
+.env
+.env.*
+app.db
+*.db
+tests
+frontend
+.claude
+to_run.md
+.DS_Store

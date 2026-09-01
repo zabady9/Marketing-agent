@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     # App
     app_env: str = "development"
     debug: bool = False
+    allowed_origins: str = "http://localhost:5173,http://localhost:3000"
+
+    @property
+    def allowed_origins_list(self) -> list[str]:
+        return [origin.strip() for origin in self.allowed_origins.split(",") if origin.strip()]
 
 
 def _validate(settings: Settings) -> None:

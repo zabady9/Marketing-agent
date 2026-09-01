@@ -22,47 +22,47 @@ def upgrade() -> None:
     """Upgrade schema."""
     # projects.archived_at was reserved but never used by any endpoint — rename
     # it in place rather than adding a second, redundant nullable timestamp.
-    with op.batch_alter_table('projects', recreate='always') as batch_op:
+    with op.batch_alter_table('projects') as batch_op:
         batch_op.alter_column('archived_at', new_column_name='deleted_at')
 
-    with op.batch_alter_table('business_profiles', recreate='always') as batch_op:
+    with op.batch_alter_table('business_profiles') as batch_op:
         batch_op.add_column(sa.Column('deleted_at', sa.DateTime(), nullable=True))
 
-    with op.batch_alter_table('study_results', recreate='always') as batch_op:
+    with op.batch_alter_table('study_results') as batch_op:
         batch_op.add_column(sa.Column('deleted_at', sa.DateTime(), nullable=True))
 
-    with op.batch_alter_table('chat_sessions', recreate='always') as batch_op:
+    with op.batch_alter_table('chat_sessions') as batch_op:
         batch_op.add_column(sa.Column('deleted_at', sa.DateTime(), nullable=True))
 
-    with op.batch_alter_table('chat_messages', recreate='always') as batch_op:
+    with op.batch_alter_table('chat_messages') as batch_op:
         batch_op.add_column(sa.Column('deleted_at', sa.DateTime(), nullable=True))
 
-    with op.batch_alter_table('memory_entries', recreate='always') as batch_op:
+    with op.batch_alter_table('memory_entries') as batch_op:
         batch_op.add_column(sa.Column('deleted_at', sa.DateTime(), nullable=True))
 
-    with op.batch_alter_table('glossary_cache', recreate='always') as batch_op:
+    with op.batch_alter_table('glossary_cache') as batch_op:
         batch_op.add_column(sa.Column('deleted_at', sa.DateTime(), nullable=True))
 
 
 def downgrade() -> None:
     """Downgrade schema."""
-    with op.batch_alter_table('glossary_cache', recreate='always') as batch_op:
+    with op.batch_alter_table('glossary_cache') as batch_op:
         batch_op.drop_column('deleted_at')
 
-    with op.batch_alter_table('memory_entries', recreate='always') as batch_op:
+    with op.batch_alter_table('memory_entries') as batch_op:
         batch_op.drop_column('deleted_at')
 
-    with op.batch_alter_table('chat_messages', recreate='always') as batch_op:
+    with op.batch_alter_table('chat_messages') as batch_op:
         batch_op.drop_column('deleted_at')
 
-    with op.batch_alter_table('chat_sessions', recreate='always') as batch_op:
+    with op.batch_alter_table('chat_sessions') as batch_op:
         batch_op.drop_column('deleted_at')
 
-    with op.batch_alter_table('study_results', recreate='always') as batch_op:
+    with op.batch_alter_table('study_results') as batch_op:
         batch_op.drop_column('deleted_at')
 
-    with op.batch_alter_table('business_profiles', recreate='always') as batch_op:
+    with op.batch_alter_table('business_profiles') as batch_op:
         batch_op.drop_column('deleted_at')
 
-    with op.batch_alter_table('projects', recreate='always') as batch_op:
+    with op.batch_alter_table('projects') as batch_op:
         batch_op.alter_column('deleted_at', new_column_name='archived_at')
