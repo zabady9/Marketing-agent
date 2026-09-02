@@ -19,6 +19,9 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      GOOGLE_API_KEY: test
+      TAVILY_API_KEY: test
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
