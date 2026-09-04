@@ -83,12 +83,19 @@ export interface CompetitorEntry {
 
 export type ChatRole = 'user' | 'assistant' | 'tool'
 
+// "pending"/"streaming" only ever appear on an assistant row for a
+// generation still in flight on the backend — see
+// app.services.chat_agent.run_chat_turn. user/tool rows are always
+// "complete".
+export type ChatMessageStatus = 'pending' | 'streaming' | 'complete' | 'error'
+
 export interface ChatMessageRecord {
   id: string
   role: ChatRole
   content: string
   tool_name: string | null
   study_id: string | null
+  status: ChatMessageStatus
   created_at: string
 }
 

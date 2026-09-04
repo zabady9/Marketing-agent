@@ -8,8 +8,8 @@ from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
 from app.agents.intake import IntakeHardBlockError
-from app.db import get_db
-from app.models import ChatMessage, StudyResult
+from app.db import SessionLocal, get_db
+from app.models import StudyResult
 from app.schemas.chat import ChatMessageCreate, ChatMessageResponse, ChatSessionResponse
 from app.schemas.intake import FeasibilityStartRequest
 from app.schemas.project import (
@@ -22,6 +22,8 @@ from app.schemas.project import (
 from app.schemas.study import StudyResultResponse
 from app.services.chat import (
     create_chat_session,
+    get_active_generation,
+    get_chat_message,
     get_chat_session,
     list_chat_messages,
     list_chat_sessions,
@@ -36,7 +38,7 @@ from app.services.project import (
     update_business_profile,
 )
 from app.services.study import list_study_results
-from app.sse import EventQueue, SSEEvent
+from app.sse import EventQueue, SSEEvent, make_event
 
 logger = logging.getLogger(__name__)
 
@@ -167,41 +169,143 @@ async def post_chat_message_endpoint(
     session = get_chat_session(db, project, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Chat session not found")
+
+    active = get_active_generation(db, session)
+    if active is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="A response is already being generated for this session.",
+        )
+
     queue = EventQueue()
 
+    # Runs detached from this request's lifecycle — it must NOT use the
+    # request-scoped `db` above, whose `finally: db.close()` (see
+    # app.db.get_db) fires as soon as this request's response cycle ends,
+    # which happens early if the client disconnects (e.g. a page refresh).
+    # Generation continues on its own DB session regardless; run_chat_turn
+    # persists progress incrementally so a reconnecting client can resume it
+    # via get_chat_message_endpoint / resume_chat_message_stream_endpoint.
     async def _run() -> None:
+        task_db = SessionLocal()
         try:
-            await run_chat_turn(db, project, session, payload.content, queue)
-        except Exception as exc:
-            logger.exception("Chat turn failed for project %s", project_id)
-            # A mid-commit failure (e.g. a bad DB write) leaves the session in a
-            # pending-rollback state — clear it before writing the error message,
-            # or the write below would itself raise PendingRollbackError.
-            db.rollback()
-            error_text = f"Something went wrong handling that message: {exc}"
-            message_id = None
-            try:
-                error_message = ChatMessage(role="assistant", content=error_text)
-                session.messages.append(error_message)
-                db.commit()
-                message_id = error_message.id
-            except Exception:
-                logger.exception(
-                    "Failed to persist chat error message for project %s", project_id
-                )
-                db.rollback()
-            await queue.put(SSEEvent.CHAT_TOOL_ERROR, {"tool_name": "chat_turn", "error": str(exc)})
-            await queue.put(
-                SSEEvent.CHAT_MESSAGE_COMPLETED,
-                {"message_id": message_id, "role": "assistant", "content": error_text},
+            task_project = get_project(task_db, project_id)
+            task_session = (
+                get_chat_session(task_db, task_project, session_id) if task_project else None
             )
+            if task_project is None or task_session is None:
+                await queue.put(
+                    SSEEvent.CHAT_TOOL_ERROR,
+                    {"tool_name": "chat_turn", "error": "Project or chat session no longer exists."},
+                )
+                await queue.put(
+                    SSEEvent.CHAT_MESSAGE_COMPLETED,
+                    {
+                        "message_id": None,
+                        "role": "assistant",
+                        "content": "Something went wrong handling that message.",
+                    },
+                )
+                return
+            await run_chat_turn(task_db, task_project, task_session, payload.content, queue)
+        except Exception:
+            # run_chat_turn persists its own errors onto the assistant row it
+            # created — this is only a last-resort net for failures before
+            # that row exists (e.g. the project/session lookups above).
+            logger.exception("Chat turn failed for project %s", project_id)
         finally:
             await queue.close()
+            task_db.close()
 
     asyncio.create_task(_run())
 
     async def _generator():
         async for event in queue:
             yield event
+
+    return EventSourceResponse(_generator())
+
+
+@router.get(
+    "/{project_id}/chat/sessions/{session_id}/messages/{message_id}",
+    response_model=ChatMessageResponse,
+)
+def get_chat_message_endpoint(
+    project_id: str, session_id: str, message_id: str, db: Session = Depends(get_db)
+) -> ChatMessageResponse:
+    project = get_project(db, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    session = get_chat_session(db, project, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+    message = get_chat_message(db, session.id, message_id)
+    if message is None:
+        raise HTTPException(status_code=404, detail="Message not found")
+    return message
+
+
+# Ceiling on how long a client will poll a resumed generation before giving
+# up — well past any real turn duration, and a backstop independent of the
+# periodic sweep in app.main that reconciles rows orphaned by a server
+# restart (see that sweep's docstring for why both exist).
+_RESUME_STREAM_MAX_SECONDS = 600
+_RESUME_STREAM_POLL_INTERVAL = 1.0
+
+
+@router.get("/{project_id}/chat/sessions/{session_id}/messages/{message_id}/stream")
+async def resume_chat_message_stream_endpoint(
+    project_id: str, session_id: str, message_id: str, after: int = 0, db: Session = Depends(get_db)
+) -> EventSourceResponse:
+    """Lets a client that reconnected after a refresh catch up on (and keep
+    watching) a generation that's still in flight on the backend. This is a
+    DB-polling loop dressed as SSE, not a resumable pub/sub broadcaster — it
+    re-emits the same chat_message_delta/chat_message_completed event shapes
+    the POST endpoint emits, at ~1s granularity, so it works correctly
+    regardless of which worker process is handling this request (state lives
+    in Postgres, not the in-memory EventQueue the original generation used).
+
+    `after` is the character count of content the client already has (e.g.
+    from the message it just fetched via GET .../messages) — the first delta
+    only carries what's beyond that, so a client that already rendered the
+    partial content doesn't see it duplicated when the stream reconnects."""
+    project = get_project(db, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    session = get_chat_session(db, project, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+    message = get_chat_message(db, session.id, message_id)
+    if message is None:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    async def _generator():
+        sent_len = max(0, after)
+        current = message
+        elapsed = 0.0
+        while elapsed < _RESUME_STREAM_MAX_SECONDS:
+            poll_db = SessionLocal()
+            try:
+                current = get_chat_message(poll_db, session_id, message_id)
+            finally:
+                poll_db.close()
+            if current is None:
+                break
+            if len(current.content) > sent_len:
+                delta = current.content[sent_len:]
+                sent_len = len(current.content)
+                yield make_event(SSEEvent.CHAT_MESSAGE_DELTA, {"content": delta})
+            if current.status in ("complete", "error"):
+                yield make_event(
+                    SSEEvent.CHAT_MESSAGE_COMPLETED,
+                    {"message_id": current.id, "role": "assistant", "content": current.content},
+                )
+                return
+            await asyncio.sleep(_RESUME_STREAM_POLL_INTERVAL)
+            elapsed += _RESUME_STREAM_POLL_INTERVAL
+        yield make_event(
+            SSEEvent.CHAT_MESSAGE_COMPLETED,
+            {"message_id": message_id, "role": "assistant", "content": current.content if current else ""},
+        )
 
     return EventSourceResponse(_generator())

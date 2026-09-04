@@ -61,8 +61,22 @@ class ChatMessage(Base):
     study_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("study_results.id", ondelete="SET NULL"), nullable=True
     )
+    # "pending" (row created, no tokens yet) | "streaming" (partial content
+    # written) | "complete" (terminal) | "error" (terminal, turn failed).
+    # user/tool rows are always "complete" immediately — only assistant rows
+    # pass through the other states while a turn is in flight, which is what
+    # lets a client reconnect mid-generation (after a refresh) and find
+    # whatever text has been generated so far. See app.services.chat_agent.
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="complete")
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
+    )
+    # Bumped on every incremental content/status write while a generation is
+    # in flight — the stuck-generation sweep (app.main) uses this, not
+    # created_at, to tell "still legitimately streaming/running a long tool
+    # call" apart from "orphaned by a server crash".
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
     )
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 

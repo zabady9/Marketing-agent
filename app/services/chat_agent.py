@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 import logging
+import time
+from datetime import datetime
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
@@ -8,12 +11,13 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.models import ChatMessage, ChatSession, MemoryEntry, Project
+from app.models import ChatMessage, ChatSession, MemoryEntry, Project, StudyResult
 from app.schemas.project import BusinessProfileUpdate
-from app.services.chat import maybe_set_title
+from app.services.chat import get_latest_study_id_for_session, maybe_set_title
 from app.services.memory import add_memory_entry, list_memory_entries
 from app.services.project import update_business_profile
 from app.services.study import run_feasibility_study
+from app.services.tool_intent import detect_single_tool_intent
 from app.sse import EventQueue, SSEEvent
 
 logger = logging.getLogger(__name__)
@@ -28,6 +32,11 @@ _FALLBACK_MESSAGE = (
     "I wasn't able to finish that in a reasonable number of steps. "
     "Try rephrasing your request or asking for one thing at a time."
 )
+
+# How often the streaming assistant row is flushed to the DB while tokens are
+# still arriving — frequent enough that a refresh loses at most a fraction of
+# a second of text, infrequent enough not to hammer the DB per-token.
+_FLUSH_INTERVAL_SECONDS = 0.3
 
 
 def _system_prompt(project: Project, memory_entries: list[MemoryEntry]) -> str:
@@ -54,7 +63,12 @@ def _system_prompt(project: Project, memory_entries: list[MemoryEntry]) -> str:
         f"- Study goal: {profile.study_goal or 'unknown'}\n\n"
         "Use the run_feasibility_study tool when the user asks you to build, run, "
         "generate, or refresh the feasibility study (market sizing, competitive "
-        "analysis, financial modeling, risk assessment, synthesis). Use the "
+        "analysis, financial modeling, risk assessment, synthesis). If study data "
+        "is already provided below, answer follow-up questions about it (e.g. "
+        "about specific competitors, financial figures, or risks) directly from "
+        "that data instead of calling the tool again — only call it when the "
+        "user explicitly asks to run, build, refresh, or redo the study, or when "
+        "no study data is available yet. Use the "
         "update_business_profile tool when the user reveals new or corrected "
         "information about the business that should be saved. Use the "
         "remember_fact_tool when the user states a durable preference or fact "
@@ -65,6 +79,47 @@ def _system_prompt(project: Project, memory_entries: list[MemoryEntry]) -> str:
         "business profile; use update_business_profile for those instead. Keep "
         "replies concise and focused on helping the user reason about this "
         "business idea." + memory_section
+    )
+
+
+# Fields that matter for report generation / QC (source citations, financial
+# calculation traces, per-claim sourcing classification, raw search queries)
+# but are pure noise for the model answering a natural-language follow-up
+# question — stripped out to keep the injected study digest compact.
+_STUDY_CONTEXT_VERBOSE_KEYS = frozenset(
+    {"citations", "calculation_trace", "claim_type", "claim_types", "search_queries_used", "methodology"}
+)
+
+
+def _trim_for_context(value: object) -> object:
+    if isinstance(value, dict):
+        return {k: _trim_for_context(v) for k, v in value.items() if k not in _STUDY_CONTEXT_VERBOSE_KEYS}
+    if isinstance(value, list):
+        return [_trim_for_context(v) for v in value]
+    return value
+
+
+def _study_context_block(study: StudyResult) -> str:
+    """Compact digest of a completed study's section data, appended to the
+    system prompt so the model can answer follow-up questions (e.g. "tell me
+    about the competitors") directly from real data instead of its only
+    option being to re-run the whole pipeline — see get_latest_study_id_for_session."""
+    parts = []
+    for section_name, envelope in (study.sections or {}).items():
+        if section_name == "glossary":
+            continue  # term definitions aren't useful as Q&A context
+        data = envelope.get("data") if isinstance(envelope, dict) else None
+        if not data:
+            continue
+        parts.append(f"### {section_name}\n{json.dumps(_trim_for_context(data), ensure_ascii=False)}")
+
+    if not parts:
+        return ""
+
+    return (
+        "\n\nData from the most recently completed feasibility study for this "
+        f"project (verdict: {study.verdict}, confidence: {study.confidence_score}):\n\n"
+        + "\n\n".join(parts)
     )
 
 
@@ -218,8 +273,15 @@ async def run_chat_turn(
     MAX_TOOL_ROUNDS), persists every intermediate tool call and the final
     assistant reply, and emits CHAT_MESSAGE_COMPLETED when done. Tool errors
     are caught, reported via CHAT_TOOL_ERROR, and fed back to the model as a
-    tool result rather than crashing the turn."""
-    user_message = ChatMessage(role="user", content=user_content)
+    tool result rather than crashing the turn.
+
+    The assistant's reply is persisted as a single ChatMessage row created
+    up front (status="pending") and updated in place as text streams in
+    (status="streaming") and finally completes (status="complete") or fails
+    (status="error") — this is the row a client reconnecting after a page
+    refresh finds and resumes via get_active_generation / the resume-stream
+    endpoint, so no already-generated text is ever lost to a disconnect."""
+    user_message = ChatMessage(role="user", content=user_content, status="complete")
     session.messages.append(user_message)
     maybe_set_title(session, user_content)
     db.commit()
@@ -227,78 +289,148 @@ async def run_chat_turn(
     last_study: dict = {}
     tools = _build_tools(db, project, queue, last_study)
     tool_by_name = {t.name: t for t in tools}
-    llm = _build_llm().bind_tools(tools)
+
+    settings = get_settings()
+    restricted = await detect_single_tool_intent(
+        user_content,
+        {name: t.description for name, t in tool_by_name.items()},
+        google_api_key=settings.google_api_key,
+        cheap_model=settings.cheap_model,
+    )
+    if restricted == "none":
+        llm = _build_llm()
+    elif restricted:
+        llm = _build_llm().bind_tools([tool_by_name[restricted]])
+    else:
+        llm = _build_llm().bind_tools(tools)
 
     memory_entries = list_memory_entries(db)
-    history: list = [SystemMessage(content=_system_prompt(project, memory_entries))]
+    system_prompt = _system_prompt(project, memory_entries)
+    latest_study_id = get_latest_study_id_for_session(db, session)
+    if latest_study_id:
+        latest_study = db.query(StudyResult).filter_by(id=latest_study_id).one_or_none()
+        if latest_study is not None:
+            system_prompt += _study_context_block(latest_study)
+
+    history: list = [SystemMessage(content=system_prompt)]
     history.extend(_load_history_messages(session))
 
-    for round_num in range(MAX_TOOL_ROUNDS):
-        response = None
-        async for chunk in llm.astream(history):
-            response = chunk if response is None else response + chunk
-            delta_text = _extract_text(chunk.content)
-            if delta_text:
-                await queue.put(SSEEvent.CHAT_MESSAGE_DELTA, {"content": delta_text})
-
-        if not response.tool_calls:
-            assistant_message = ChatMessage(role="assistant", content=_extract_text(response.content))
-            session.messages.append(assistant_message)
-            db.commit()
-            await queue.put(
-                SSEEvent.CHAT_MESSAGE_COMPLETED,
-                {
-                    "message_id": assistant_message.id,
-                    "role": "assistant",
-                    "content": assistant_message.content,
-                },
-            )
-            return assistant_message
-
-        history.append(response)
-        for call in response.tool_calls:
-            tool_fn = tool_by_name.get(call["name"])
-            try:
-                if tool_fn is None:
-                    raise ValueError(f"Unknown tool: {call['name']}")
-                tool_result = await tool_fn.ainvoke(call["args"])
-            except Exception as exc:
-                logger.warning(
-                    "Chat tool '%s' failed for project %s: %s", call["name"], project.id, exc
-                )
-                await queue.put(
-                    SSEEvent.CHAT_TOOL_ERROR,
-                    {"tool_name": call["name"], "error": str(exc)},
-                )
-                tool_result = f"Error running {call['name']}: {exc}"
-
-            tool_message_row = ChatMessage(
-                role="tool",
-                content=str(tool_result),
-                tool_name=call["name"],
-                study_id=last_study.pop("id", None)
-                if call["name"] == "run_feasibility_study_tool"
-                else None,
-            )
-            session.messages.append(tool_message_row)
-            db.commit()
-
-            history.append(ToolMessage(content=str(tool_result), tool_call_id=call["id"]))
-
-    logger.warning(
-        "Chat tool loop hit the %s-round cap for project %s without a final reply",
-        MAX_TOOL_ROUNDS,
-        project.id,
-    )
-    fallback_message = ChatMessage(role="assistant", content=_FALLBACK_MESSAGE)
-    session.messages.append(fallback_message)
+    assistant_message = ChatMessage(role="assistant", content="", status="pending")
+    session.messages.append(assistant_message)
     db.commit()
-    await queue.put(
-        SSEEvent.CHAT_MESSAGE_COMPLETED,
-        {
-            "message_id": fallback_message.id,
-            "role": "assistant",
-            "content": fallback_message.content,
-        },
-    )
-    return fallback_message
+
+    try:
+        for round_num in range(MAX_TOOL_ROUNDS):
+            response = None
+            last_flush = time.monotonic()
+            async for chunk in llm.astream(history):
+                response = chunk if response is None else response + chunk
+                delta_text = _extract_text(chunk.content)
+                if delta_text:
+                    await queue.put(SSEEvent.CHAT_MESSAGE_DELTA, {"content": delta_text})
+                now = time.monotonic()
+                if now - last_flush >= _FLUSH_INTERVAL_SECONDS:
+                    assistant_message.content = _extract_text(response.content)
+                    assistant_message.status = "streaming"
+                    db.commit()
+                    last_flush = now
+
+            # Flush whatever this round produced even if it never hit the
+            # throttle interval above (e.g. a short reply, or the tail end
+            # after the last throttled flush).
+            assistant_message.content = _extract_text(response.content)
+            assistant_message.status = "streaming"
+            db.commit()
+
+            if not response.tool_calls:
+                assistant_message.status = "complete"
+                db.commit()
+                await queue.put(
+                    SSEEvent.CHAT_MESSAGE_COMPLETED,
+                    {
+                        "message_id": assistant_message.id,
+                        "role": "assistant",
+                        "content": assistant_message.content,
+                    },
+                )
+                return assistant_message
+
+            history.append(response)
+            for call in response.tool_calls:
+                tool_fn = tool_by_name.get(call["name"])
+                try:
+                    if tool_fn is None:
+                        raise ValueError(f"Unknown tool: {call['name']}")
+                    tool_result = await tool_fn.ainvoke(call["args"])
+                except Exception as exc:
+                    logger.warning(
+                        "Chat tool '%s' failed for project %s: %s", call["name"], project.id, exc
+                    )
+                    await queue.put(
+                        SSEEvent.CHAT_TOOL_ERROR,
+                        {"tool_name": call["name"], "error": str(exc)},
+                    )
+                    tool_result = f"Error running {call['name']}: {exc}"
+
+                tool_message_row = ChatMessage(
+                    role="tool",
+                    content=str(tool_result),
+                    tool_name=call["name"],
+                    status="complete",
+                    study_id=last_study.pop("id", None)
+                    if call["name"] == "run_feasibility_study_tool"
+                    else None,
+                )
+                session.messages.append(tool_message_row)
+                # Heartbeat the assistant placeholder row too — a single tool
+                # call (e.g. the full feasibility-study pipeline) can run far
+                # longer than the streaming flush interval above, and the
+                # stuck-generation sweep in app.main relies on updated_at
+                # staying fresh to avoid mistaking a legitimately long-running
+                # tool call for an orphaned/crashed generation.
+                assistant_message.updated_at = datetime.utcnow()
+                db.commit()
+
+                history.append(ToolMessage(content=str(tool_result), tool_call_id=call["id"]))
+
+        logger.warning(
+            "Chat tool loop hit the %s-round cap for project %s without a final reply",
+            MAX_TOOL_ROUNDS,
+            project.id,
+        )
+        assistant_message.content = _FALLBACK_MESSAGE
+        assistant_message.status = "complete"
+        db.commit()
+        await queue.put(
+            SSEEvent.CHAT_MESSAGE_COMPLETED,
+            {
+                "message_id": assistant_message.id,
+                "role": "assistant",
+                "content": assistant_message.content,
+            },
+        )
+        return assistant_message
+    except Exception as exc:
+        logger.exception("Chat turn failed for project %s", project.id)
+        # A mid-commit failure leaves the session in a pending-rollback state —
+        # clear it before writing the error, or that write would itself raise
+        # PendingRollbackError. This also reloads assistant_message.content
+        # back to its last successfully committed (i.e. already-streamed)
+        # value, which is deliberately preserved below rather than discarded.
+        db.rollback()
+        if assistant_message.content:
+            assistant_message.content += f"\n\n[Something went wrong finishing this reply: {exc}]"
+        else:
+            assistant_message.content = f"Something went wrong handling that message: {exc}"
+        assistant_message.status = "error"
+        db.commit()
+        await queue.put(SSEEvent.CHAT_TOOL_ERROR, {"tool_name": "chat_turn", "error": str(exc)})
+        await queue.put(
+            SSEEvent.CHAT_MESSAGE_COMPLETED,
+            {
+                "message_id": assistant_message.id,
+                "role": "assistant",
+                "content": assistant_message.content,
+            },
+        )
+        return assistant_message

@@ -67,6 +67,7 @@ class ChatMessageAdminUpdate(BaseModel):
     role: str | None = None
     tool_name: str | None = None
     study_id: str | None = None
+    status: str | None = None
 
 
 class MemoryEntryAdminUpdate(BaseModel):

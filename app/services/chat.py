@@ -64,6 +64,54 @@ def maybe_set_title(session: ChatSession, first_user_content: str) -> None:
         session.title = _derive_title(first_user_content)
 
 
+def get_active_generation(db: Session, session: ChatSession) -> ChatMessage | None:
+    """The in-flight assistant reply for this session, if any — used both to
+    reject a second concurrent POST (see post_chat_message_endpoint) and to
+    let a reconnecting client resume it after a refresh."""
+    return (
+        db.query(ChatMessage)
+        .filter(
+            ChatMessage.session_id == session.id,
+            ChatMessage.role == "assistant",
+            ChatMessage.status.in_(["pending", "streaming"]),
+        )
+        .order_by(ChatMessage.created_at.desc())
+        .first()
+    )
+
+
+def get_latest_study_id_for_session(db: Session, session: ChatSession) -> str | None:
+    """The study_id of the most recent successful run_feasibility_study_tool
+    call in this session, if any — lets the chat agent surface that study's
+    already-computed section data (competitors, financials, risks, ...) back
+    into context on later turns, instead of the model's only option being to
+    re-run the whole pipeline to answer a follow-up question."""
+    latest = (
+        db.query(ChatMessage)
+        .filter(
+            ChatMessage.session_id == session.id,
+            ChatMessage.tool_name == "run_feasibility_study_tool",
+            ChatMessage.study_id.isnot(None),
+            ChatMessage.deleted_at.is_(None),
+        )
+        .order_by(ChatMessage.created_at.desc())
+        .first()
+    )
+    return latest.study_id if latest else None
+
+
+def get_chat_message(db: Session, session_id: str, message_id: str) -> ChatMessage | None:
+    """Scoped to session (by id, not object — safe to call against a
+    short-lived polling session without touching a ChatSession loaded on a
+    different, possibly-closed session). Prevents one session's routes from
+    reading another session's message by guessing an id."""
+    return (
+        db.query(ChatMessage)
+        .filter(ChatMessage.id == message_id, ChatMessage.session_id == session_id)
+        .one_or_none()
+    )
+
+
 # ── Admin ──────────────────────────────────────────────────────────────────
 
 

@@ -126,6 +126,20 @@ export async function listChatMessages(
   return (await res.json()) as ChatMessageRecord[]
 }
 
+export async function getChatMessage(
+  projectId: string,
+  sessionId: string,
+  messageId: string,
+): Promise<ChatMessageRecord> {
+  const res = await fetch(
+    `${BASE}/api/projects/${projectId}/chat/sessions/${sessionId}/messages/${messageId}`,
+  )
+  if (!res.ok) {
+    throw new Error(await errorMessageFor(res))
+  }
+  return (await res.json()) as ChatMessageRecord
+}
+
 export async function listMemory(): Promise<MemoryEntry[]> {
   const res = await fetch(`${BASE}/api/memory`)
   if (!res.ok) {
@@ -158,23 +172,19 @@ export interface ChatSSEEvent {
   data: unknown
 }
 
-// The chat endpoint is a POST that streams an SSE response body — EventSource
-// can't send a POST body, so this reads the fetch response stream directly
-// and parses the standard SSE "event: ...\ndata: ...\n\n" framing by hand.
-export async function* streamChatMessage(
-  projectId: string,
-  sessionId: string,
-  content: string,
-): AsyncGenerator<ChatSSEEvent> {
-  const res = await fetch(
-    `${BASE}/api/projects/${projectId}/chat/sessions/${sessionId}/messages`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content }),
-    },
-  )
-  if (!res.ok || !res.body) {
+// Thrown when the POST endpoint 409s because a generation is already running
+// for this session (e.g. another tab is mid-turn, or this tab reconnected
+// after a refresh while its own prior generation is still in flight).
+export class GenerationInProgressError extends Error {}
+
+// Reads a fetch Response's body as the standard SSE "event: ...\ndata:
+// ...\n\n" framing and yields parsed events — shared by both the POST chat
+// endpoint (streamChatMessage) and the GET resume-stream endpoint
+// (resumeChatMessageStream), since EventSource can't be used for either
+// (POST can't carry a body; the resume stream is opened programmatically
+// alongside other fetches, not as a page-level EventSource).
+async function* consumeSSEStream(res: Response): AsyncGenerator<ChatSSEEvent> {
+  if (!res.body) {
     throw new Error(await errorMessageFor(res))
   }
 
@@ -218,4 +228,51 @@ export async function* streamChatMessage(
       break
     }
   }
+}
+
+// The chat endpoint is a POST that streams an SSE response body — EventSource
+// can't send a POST body, so this reads the fetch response stream directly.
+export async function* streamChatMessage(
+  projectId: string,
+  sessionId: string,
+  content: string,
+): AsyncGenerator<ChatSSEEvent> {
+  const res = await fetch(
+    `${BASE}/api/projects/${projectId}/chat/sessions/${sessionId}/messages`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    },
+  )
+  if (res.status === 409) {
+    throw new GenerationInProgressError(await errorMessageFor(res))
+  }
+  if (!res.ok) {
+    throw new Error(await errorMessageFor(res))
+  }
+  yield* consumeSSEStream(res)
+}
+
+// Re-attaches to a generation already in flight on the backend (e.g. after a
+// page refresh) — polls the persisted message server-side and re-emits the
+// same chat_message_delta/chat_message_completed shape streamChatMessage
+// does, so callers can consume both identically. `alreadyHaveLength` is the
+// length of content the caller already rendered (e.g. from a prior
+// listChatMessages/getChatMessage call) — only the delta beyond that is
+// streamed back, so already-shown text isn't duplicated.
+export async function* resumeChatMessageStream(
+  projectId: string,
+  sessionId: string,
+  messageId: string,
+  alreadyHaveLength: number,
+): AsyncGenerator<ChatSSEEvent> {
+  const res = await fetch(
+    `${BASE}/api/projects/${projectId}/chat/sessions/${sessionId}/messages/${messageId}/stream` +
+      `?after=${alreadyHaveLength}`,
+  )
+  if (!res.ok) {
+    throw new Error(await errorMessageFor(res))
+  }
+  yield* consumeSSEStream(res)
 }

@@ -17,6 +17,7 @@ class ChatMessageResponse(BaseModel):
     content: str
     tool_name: str | None
     study_id: str | None
+    status: str
     created_at: datetime
     deleted_at: datetime | None
 

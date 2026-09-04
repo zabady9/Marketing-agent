@@ -1,6 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { createChatSession, listChatMessages, listChatSessions, streamChatMessage } from '../api'
+import {
+  createChatSession,
+  GenerationInProgressError,
+  getStudyById,
+  listChatMessages,
+  listChatSessions,
+  resumeChatMessageStream,
+  streamChatMessage,
+} from '../api'
+import type { ChatSSEEvent } from '../api'
 import { SectionCardShell, Stat } from '../components/report/primitives'
 import { GlossaryProvider } from '../components/report/GlossaryContext'
 import { RiskMatrix } from '../components/report/RiskMatrix'
@@ -21,6 +30,7 @@ import type {
   FinancialFeasibilityData,
   MarketOverviewData,
   RiskAssessmentData,
+  SectionStore,
 } from '../types'
 
 type TranscriptItem =
@@ -39,6 +49,8 @@ function historyToTranscript(messages: ChatMessageRecord[]): TranscriptItem[] {
   // Every successful study run now has its own permanent, independently
   // viewable StudyResult row, so every one gets its own report-link card —
   // each correctly linked to the specific run it came from via study_id.
+  // This placeholder card is later upgraded in place to the full set of rich
+  // section cards once its StudyResult loads — see expandStudySections below.
   const items: TranscriptItem[] = []
   messages.forEach((m) => {
     items.push({ kind: 'message', id: m.id, role: m.role, content: m.content, toolName: m.tool_name })
@@ -47,6 +59,23 @@ function historyToTranscript(messages: ChatMessageRecord[]): TranscriptItem[] {
     }
   })
   return items
+}
+
+// Reconstructs the same `kind: 'section'` transcript items the live
+// section_ready SSE handler produces, from a persisted StudyResult — so
+// reload renders byte-identical cards to what streamed in live. Each
+// SectionStore entry is a `{language, review_recommended?, data}` envelope
+// (see ParsedSection<T> in types.ts); only `.data` is ever rendered, mirroring
+// the live handler which also stores `payload.data`, not the whole envelope.
+function expandStudySections(studyId: string, sections: SectionStore): TranscriptItem[] {
+  return Object.entries(sections)
+    .filter((entry): entry is [string, { data: unknown }] => entry[1] !== undefined)
+    .map(([section, envelope]) => ({
+      kind: 'section' as const,
+      section,
+      data: envelope.data,
+      studyId,
+    }))
 }
 
 function fmt(n: number | null | undefined): string {
@@ -307,6 +336,54 @@ export function ChatPage() {
         if (cancelled) return
         setTranscript(historyToTranscript(messages))
         setLoadingHistory(false)
+
+        // If the page was refreshed mid-generation, the last assistant row
+        // is still "pending"/"streaming" — historyToTranscript already
+        // rendered whatever text it has (so nothing generated is lost even
+        // if the resume below fails), and this picks the live stream back
+        // up in place.
+        const lastMessage = messages[messages.length - 1]
+        if (
+          lastMessage &&
+          lastMessage.role === 'assistant' &&
+          (lastMessage.status === 'pending' || lastMessage.status === 'streaming')
+        ) {
+          attachToActiveGeneration(lastMessage)
+        }
+
+        // Upgrade each report_link placeholder to the full set of rich
+        // section cards once its StudyResult loads. Runs after the initial
+        // paint so chat text renders immediately regardless of how many
+        // studies this session has; a failed fetch (e.g. deleted study)
+        // just leaves that placeholder in place — no regression.
+        const studyIds = [
+          ...new Set(
+            messages
+              .filter(
+                (m): m is ChatMessageRecord & { study_id: string } =>
+                  m.role === 'tool' && m.tool_name === 'run_feasibility_study_tool' && !!m.study_id,
+              )
+              .map((m) => m.study_id),
+          ),
+        ]
+        studyIds.forEach((studyId) => {
+          getStudyById(projectId, studyId)
+            .then((study) => {
+              if (cancelled) return
+              const expanded = expandStudySections(studyId, study.sections)
+              if (expanded.length === 0) return
+              setTranscript((prev) =>
+                prev.flatMap((item) =>
+                  item.kind === 'section' && item.section === 'report_link' && item.studyId === studyId
+                    ? expanded
+                    : [item],
+                ),
+              )
+            })
+            .catch(() => {
+              // Leave the report_link fallback card in place.
+            })
+        })
       })
       .catch((err) => {
         if (cancelled) return
@@ -329,86 +406,141 @@ export function ChatPage() {
     navigate(`/projects/${projectId}/chat/${session.id}`)
   }
 
+  // Shared by a fresh send (streamChatMessage) and resuming an in-flight
+  // generation after a refresh (resumeChatMessageStream) — both yield the
+  // same event shapes, so the UI update logic doesn't need to know which one
+  // is driving it.
+  async function consumeChatEvents(stream: AsyncGenerator<ChatSSEEvent>) {
+    for await (const evt of stream) {
+      if (evt.event === 'chat_tool_error') {
+        const payload = evt.data as ChatToolErrorPayload
+        setTranscript((prev) => [
+          ...prev,
+          { kind: 'tool_error', toolName: payload.tool_name, error: payload.error },
+        ])
+      } else if (evt.event === 'study_started') {
+        const payload = evt.data as { study_id: string }
+        activeStudyIdRef.current = payload.study_id
+      } else if (evt.event === 'section_ready') {
+        const payload = evt.data as { section: string; data: unknown }
+        setTranscript((prev) => [
+          ...prev,
+          {
+            kind: 'section',
+            section: payload.section,
+            data: payload.data,
+            studyId: activeStudyIdRef.current,
+          },
+        ])
+        setProgressLabel(null)
+      } else if (evt.event === 'chat_message_delta') {
+        const payload = evt.data as ChatMessageDeltaPayload
+        setTranscript((prev) => {
+          const last = prev[prev.length - 1]
+          if (last && last.kind === 'message' && last.streaming) {
+            return [...prev.slice(0, -1), { ...last, content: last.content + payload.content }]
+          }
+          return [
+            ...prev,
+            {
+              kind: 'message',
+              id: `streaming-${Date.now()}`,
+              role: 'assistant',
+              content: payload.content,
+              streaming: true,
+            },
+          ]
+        })
+        setProgressLabel(null)
+      } else if (evt.event === 'chat_message_completed') {
+        const payload = evt.data as ChatMessageCompletedPayload
+        setTranscript((prev) => {
+          const finalMessage: TranscriptItem = {
+            kind: 'message',
+            id: payload.message_id ?? `local-${Date.now()}`,
+            role: payload.role,
+            content: payload.content,
+          }
+          const last = prev[prev.length - 1]
+          if (last && last.kind === 'message' && last.streaming) {
+            return [...prev.slice(0, -1), finalMessage]
+          }
+          return [...prev, finalMessage]
+        })
+        setProgressLabel(null)
+      } else if (evt.event === 'agent_started') {
+        const payload = evt.data as { agent: string }
+        setProgressLabel(`Running ${payload.agent}…`)
+      } else if (evt.event === 'agent_completed') {
+        const payload = evt.data as { agent: string }
+        setProgressLabel(`${payload.agent} completed`)
+      }
+    }
+  }
+
+  // Re-attaches to a generation that's already running on the backend for
+  // this session — used both when reload finds a message left mid-generation
+  // (see the history-loading effect) and when a fresh send 409s because
+  // another tab (or this tab's own prior attempt) is already generating one.
+  async function attachToActiveGeneration(active: ChatMessageRecord) {
+    if (!projectId || !sessionId) return
+    setTranscript((prev) => {
+      if (prev.some((item) => item.kind === 'message' && item.id === active.id)) {
+        return prev.map((item) =>
+          item.kind === 'message' && item.id === active.id ? { ...item, streaming: true } : item,
+        )
+      }
+      return [
+        ...prev,
+        { kind: 'message', id: active.id, role: 'assistant', content: active.content, streaming: true },
+      ]
+    })
+    setIsSending(true)
+    try {
+      await consumeChatEvents(
+        resumeChatMessageStream(projectId, sessionId, active.id, active.content.length),
+      )
+    } catch (err) {
+      setSendError(err instanceof Error ? err.message : 'Failed to resume the in-progress reply.')
+    } finally {
+      setIsSending(false)
+      setProgressLabel(null)
+    }
+  }
+
   async function handleSend() {
     if (!projectId || !sessionId || !input.trim() || isSending) return
     const content = input.trim()
     const wasFirstMessage = !transcript.some((item) => item.kind === 'message' && item.role === 'user')
+    const localId = `local-${Date.now()}`
     setInput('')
     setSendError(null)
-    setTranscript((prev) => [
-      ...prev,
-      { kind: 'message', id: `local-${Date.now()}`, role: 'user', content },
-    ])
+    setTranscript((prev) => [...prev, { kind: 'message', id: localId, role: 'user', content }])
     setIsSending(true)
 
     try {
-      for await (const evt of streamChatMessage(projectId, sessionId, content)) {
-        if (evt.event === 'chat_tool_error') {
-          const payload = evt.data as ChatToolErrorPayload
-          setTranscript((prev) => [
-            ...prev,
-            { kind: 'tool_error', toolName: payload.tool_name, error: payload.error },
-          ])
-        } else if (evt.event === 'study_started') {
-          const payload = evt.data as { study_id: string }
-          activeStudyIdRef.current = payload.study_id
-        } else if (evt.event === 'section_ready') {
-          const payload = evt.data as { section: string; data: unknown }
-          setTranscript((prev) => [
-            ...prev,
-            {
-              kind: 'section',
-              section: payload.section,
-              data: payload.data,
-              studyId: activeStudyIdRef.current,
-            },
-          ])
-          setProgressLabel(null)
-        } else if (evt.event === 'chat_message_delta') {
-          const payload = evt.data as ChatMessageDeltaPayload
-          setTranscript((prev) => {
-            const last = prev[prev.length - 1]
-            if (last && last.kind === 'message' && last.streaming) {
-              return [...prev.slice(0, -1), { ...last, content: last.content + payload.content }]
-            }
-            return [
-              ...prev,
-              {
-                kind: 'message',
-                id: `streaming-${Date.now()}`,
-                role: 'assistant',
-                content: payload.content,
-                streaming: true,
-              },
-            ]
-          })
-          setProgressLabel(null)
-        } else if (evt.event === 'chat_message_completed') {
-          const payload = evt.data as ChatMessageCompletedPayload
-          setTranscript((prev) => {
-            const finalMessage: TranscriptItem = {
-              kind: 'message',
-              id: payload.message_id ?? `local-${Date.now()}`,
-              role: payload.role,
-              content: payload.content,
-            }
-            const last = prev[prev.length - 1]
-            if (last && last.kind === 'message' && last.streaming) {
-              return [...prev.slice(0, -1), finalMessage]
-            }
-            return [...prev, finalMessage]
-          })
-          setProgressLabel(null)
-        } else if (evt.event === 'agent_started') {
-          const payload = evt.data as { agent: string }
-          setProgressLabel(`Running ${payload.agent}…`)
-        } else if (evt.event === 'agent_completed') {
-          const payload = evt.data as { agent: string }
-          setProgressLabel(`${payload.agent} completed`)
-        }
-      }
+      await consumeChatEvents(streamChatMessage(projectId, sessionId, content))
     } catch (err) {
-      setSendError(err instanceof Error ? err.message : 'Failed to send message.')
+      if (err instanceof GenerationInProgressError) {
+        // The backend never accepted this turn — drop the optimistic bubble
+        // and give the input back so the user can resend once the
+        // already-running generation (another tab, or this tab reconnecting
+        // after a refresh) finishes.
+        setTranscript((prev) => prev.filter((item) => !(item.kind === 'message' && item.id === localId)))
+        setInput(content)
+        setSendError('A response is already being generated for this chat — showing its progress below.')
+        try {
+          const messages = await listChatMessages(projectId, sessionId)
+          const active = [...messages]
+            .reverse()
+            .find((m) => m.role === 'assistant' && (m.status === 'pending' || m.status === 'streaming'))
+          if (active) await attachToActiveGeneration(active)
+        } catch {
+          // Best-effort — the message above already explains the 409.
+        }
+      } else {
+        setSendError(err instanceof Error ? err.message : 'Failed to send message.')
+      }
     } finally {
       setIsSending(false)
       setProgressLabel(null)
