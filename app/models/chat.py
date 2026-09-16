@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, Text
+from sqlalchemy import JSON, DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -61,6 +61,11 @@ class ChatMessage(Base):
     study_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("study_results.id", ondelete="SET NULL"), nullable=True
     )
+    # Set only on a successful generate_chart_tool call — a validated
+    # ChartSpec (app.schemas.chart) as a plain dict, rendered by the frontend
+    # as an actual chart instead of (or alongside) the tool's text summary.
+    # Null for every other tool call and for user/assistant rows.
+    chart_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     # "pending" (row created, no tokens yet) | "streaming" (partial content
     # written) | "complete" (terminal) | "error" (terminal, turn failed).
     # user/tool rows are always "complete" immediately — only assistant rows

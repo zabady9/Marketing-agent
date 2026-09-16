@@ -40,6 +40,14 @@ class SSEEvent(StrEnum):
     CHAT_TOOL_ERROR = "chat_tool_error"
     CHAT_MESSAGE_DELTA = "chat_message_delta"
     CHAT_MESSAGE_COMPLETED = "chat_message_completed"
+    # Fired the moment generate_chart_tool produces a validated ChartSpec —
+    # lets the frontend render the chart live, mid-turn, the same way
+    # SECTION_READY does for pipeline sections.
+    CHAT_CHART_READY = "chat_chart_ready"
+
+    # Deep Agent planning (write_todos) visibility — purely additive, safe
+    # for a frontend that doesn't recognize it to ignore.
+    AGENT_PLAN_UPDATED = "agent_plan_updated"
 
 
 def make_event(event: SSEEvent, data: dict[str, Any]) -> ServerSentEvent:

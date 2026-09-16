@@ -89,6 +89,26 @@ export type ChatRole = 'user' | 'assistant' | 'tool'
 // "complete".
 export type ChatMessageStatus = 'pending' | 'streaming' | 'complete' | 'error'
 
+// Matches app/schemas/chart.py::ChartSeries — one data series for a
+// generate_chart_tool result. `data` has exactly one entry per `categories`
+// entry, in the same order (enforced backend-side).
+export interface ChartSeries {
+  name: string
+  data: (number | null)[]
+}
+
+// Matches app/schemas/chart.py::ChartSpec (model_dump(), plain snake_case
+// JSON). A pie chart always has exactly one series; series always has at
+// least one entry; categories always has at least one entry.
+export interface ChartSpec {
+  chart_type: 'bar' | 'line' | 'pie'
+  title: string
+  categories: string[]
+  series: ChartSeries[]
+  x_label: string | null
+  y_label: string | null
+}
+
 export interface ChatMessageRecord {
   id: string
   role: ChatRole
@@ -97,6 +117,9 @@ export interface ChatMessageRecord {
   study_id: string | null
   status: ChatMessageStatus
   created_at: string
+  // Set only on a persisted tool-role row for a successful
+  // generate_chart_tool call — see app/models/chat.py::ChatMessage.chart_data.
+  chart_data: ChartSpec | null
 }
 
 export interface ChatSessionRecord {
@@ -128,6 +151,15 @@ export interface ChatMessageCompletedPayload {
 
 export interface ChatMessageDeltaPayload {
   content: string
+}
+
+// Payload for the chat_chart_ready SSE event (app/sse.py::SSEEvent.CHAT_CHART_READY)
+// — pushed live the moment a generate_chart_tool call succeeds, mirroring how
+// section_ready works for pipeline sections.
+export interface ChatChartReadyPayload {
+  message_id: string
+  tool_name: string
+  chart: ChartSpec
 }
 
 export interface BusinessProfile {

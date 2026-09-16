@@ -18,13 +18,16 @@ import { CompetitorPositionChart } from '../components/report/charts/CompetitorP
 import { SensitivityCharts } from '../components/report/charts/SensitivityCharts'
 import { CashFlowChart } from '../components/report/charts/CashFlowChart'
 import { ConfidenceMeter } from '../components/report/charts/ConfidenceMeter'
+import { GenericChart } from '../components/report/charts/GenericChart'
 import type {
+  ChatChartReadyPayload,
   ChatMessageCompletedPayload,
   ChatMessageDeltaPayload,
   ChatMessageRecord,
   ChatRole,
   ChatSessionRecord,
   ChatToolErrorPayload,
+  ChartSpec,
   CompetitiveLandscapeData,
   ExecutiveSummaryData,
   FinancialFeasibilityData,
@@ -44,6 +47,7 @@ type TranscriptItem =
     }
   | { kind: 'tool_error'; toolName: string; error: string }
   | { kind: 'section'; section: string; data: unknown; studyId?: string }
+  | { kind: 'chart'; chart: ChartSpec; messageId: string }
 
 function historyToTranscript(messages: ChatMessageRecord[]): TranscriptItem[] {
   // Every successful study run now has its own permanent, independently
@@ -54,8 +58,14 @@ function historyToTranscript(messages: ChatMessageRecord[]): TranscriptItem[] {
   const items: TranscriptItem[] = []
   messages.forEach((m) => {
     items.push({ kind: 'message', id: m.id, role: m.role, content: m.content, toolName: m.tool_name })
-    if (m.role === 'tool' && m.tool_name === 'run_feasibility_study_tool' && m.study_id) {
+    // Any successful study-producing tool call (the full study, or one of
+    // the single-capability tools) gets a placeholder, upgraded in place to
+    // real section card(s) below — not just run_feasibility_study_tool.
+    if (m.role === 'tool' && m.study_id) {
       items.push({ kind: 'section', section: 'report_link', data: null, studyId: m.study_id })
+    }
+    if (m.role === 'tool' && m.tool_name === 'generate_chart_tool' && m.chart_data) {
+      items.push({ kind: 'chart', chart: m.chart_data, messageId: m.id })
     }
   })
   return items
@@ -229,9 +239,12 @@ function SectionCard({
   }
 
   if (section === 'report_link') {
+    // Brief fallback shown only until expandStudySections upgrades this into
+    // the real section card(s) (or if that fetch fails) — covers both a full
+    // study and a single-capability result, hence the generic wording.
     return (
-      <SectionCardShell title="Feasibility Study">
-        <p className="text-xs text-gray-600">A feasibility study was generated for this project.</p>
+      <SectionCardShell title="Result">
+        <p className="text-xs text-gray-600">Loading result…</p>
         <ViewFullReportLink projectId={projectId} studyId={studyId} />
       </SectionCardShell>
     )
@@ -361,7 +374,7 @@ export function ChatPage() {
             messages
               .filter(
                 (m): m is ChatMessageRecord & { study_id: string } =>
-                  m.role === 'tool' && m.tool_name === 'run_feasibility_study_tool' && !!m.study_id,
+                  m.role === 'tool' && !!m.study_id,
               )
               .map((m) => m.study_id),
           ),
@@ -433,6 +446,12 @@ export function ChatPage() {
           },
         ])
         setProgressLabel(null)
+      } else if (evt.event === 'chat_chart_ready') {
+        const payload = evt.data as ChatChartReadyPayload
+        setTranscript((prev) => [
+          ...prev,
+          { kind: 'chart', chart: payload.chart, messageId: payload.message_id },
+        ])
       } else if (evt.event === 'chat_message_delta') {
         const payload = evt.data as ChatMessageDeltaPayload
         setTranscript((prev) => {
@@ -611,6 +630,15 @@ export function ChatPage() {
                   if (item.kind === 'message') return <MessageBubble key={i} item={item} />
                   if (item.kind === 'tool_error') {
                     return <ToolErrorBubble key={i} toolName={item.toolName} error={item.error} />
+                  }
+                  if (item.kind === 'chart') {
+                    return (
+                      <div key={i} className="flex justify-start">
+                        <SectionCardShell title={item.chart.title}>
+                          <GenericChart chart={item.chart} compact />
+                        </SectionCardShell>
+                      </div>
+                    )
                   }
                   if (item.section === 'glossary') return null
                   return (
