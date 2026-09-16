@@ -3,11 +3,15 @@ from __future__ import annotations
 import logging
 from typing import Literal
 
+from langchain.agents.middleware import TodoListMiddleware
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langsmith import traceable
 from pydantic import BaseModel
 
 from app.agents.base import AgentName, AgentSoftError, gather_searches_with_sse
+from app.agents.deep_agent_factory import DeepAgentPhaseError, run_structured_deep_agent
+from app.agents.deep_agent_tools import TodoSSEMiddleware, make_tavily_search_tool
 from app.config import get_settings
 from app.schemas.common import ClaimType
 from app.schemas.intake import FeasibilityInput
@@ -77,6 +81,7 @@ class CompetitiveAnalysisAgent:
         )
         self._settings = s
 
+    @traceable(name="Competitive Analysis Agent", run_type="chain")
     async def run(
         self, fi: FeasibilityInput, queue: EventQueue
     ) -> CompetitiveAnalysisOutput:
@@ -124,43 +129,62 @@ class CompetitiveAnalysisAgent:
         )
 
         # ── LLM extraction ────────────────────────────────────────────────────
-        structured_llm = self._llm.with_structured_output(_CompetitiveLLMOutput)
+        system_prompt = (
+            "You are a competitive intelligence analyst producing a "
+            "feasibility study section.\n"
+            "Using the numbered search results provided:\n"
+            "1. Identify the main competitors (include all user-provided ones).\n"
+            "2. For each competitor, list concrete strengths and weaknesses.\n"
+            "3. Identify what makes the user's business concept different "
+            "(key_differentiators).\n"
+            "4. Identify market gaps or underserved niches (market_gaps).\n"
+            "5. For each competitor, write a `methodology` sentence (<=25 words) "
+            "naming WHAT the cited result specifically says (e.g. 'Cited result [i] "
+            "describes their pricing and lack of a subscription tier') — a reviewer "
+            "must be able to check the citation actually supports this profile. If no "
+            "citation applies, say so plainly, e.g. 'No cited result covers this "
+            "competitor; profile is inferred from general category knowledge.' Do not "
+            "claim a source you did not select as citation_indices.\n"
+            "Cite sources using citation_indices (0-based indices into results).\n"
+            f"Write ALL text fields in language: {fi.output_language}.\n"
+            f"{ENGLISH_ONLY_TERMS_NOTE}\n"
+            "If, after reviewing the results, a specific gap remains for a named "
+            "competitor (e.g. it came back with zero citations, or its market "
+            "position is unclear), you may call tavily_search once or twice with a "
+            "narrowly targeted follow-up query to try to fill that specific gap "
+            "before finalizing — do not re-run searches that already returned "
+            "results, and do not iterate for its own sake when the existing results "
+            "are already sufficient."
+        )
+        human_message = (
+            f"Business concept: {biz}\n"
+            f"Geography: {geo}\n"
+            f"Business model: {model_type}\n"
+            f"{user_competitors_note}\n"
+            f"Search results ({len(all_results)} total):\n{results_context}"
+        )
         try:
-            llm_out: _CompetitiveLLMOutput = await structured_llm.ainvoke(
-                [
-                    SystemMessage(
-                        content=(
-                            "You are a competitive intelligence analyst producing a "
-                            "feasibility study section.\n"
-                            "Using the numbered search results provided:\n"
-                            "1. Identify the main competitors (include all user-provided ones).\n"
-                            "2. For each competitor, list concrete strengths and weaknesses.\n"
-                            "3. Identify what makes the user's business concept different "
-                            "(key_differentiators).\n"
-                            "4. Identify market gaps or underserved niches (market_gaps).\n"
-                            "5. For each competitor, write a `methodology` sentence (<=25 words) "
-                            "naming WHAT the cited result specifically says (e.g. 'Cited result [i] "
-                            "describes their pricing and lack of a subscription tier') — a reviewer "
-                            "must be able to check the citation actually supports this profile. If no "
-                            "citation applies, say so plainly, e.g. 'No cited result covers this "
-                            "competitor; profile is inferred from general category knowledge.' Do not "
-                            "claim a source you did not select as citation_indices.\n"
-                            "Cite sources using citation_indices (0-based indices into results).\n"
-                            f"Write ALL text fields in language: {fi.output_language}.\n"
-                            f"{ENGLISH_ONLY_TERMS_NOTE}"
+            if self._settings.deepagents_enabled:
+                llm_out: _CompetitiveLLMOutput = await run_structured_deep_agent(
+                    model=self._llm,
+                    tools=[
+                        make_tavily_search_tool(
+                            queue, fi.study_id, _AGENT, self._settings.tavily_api_key, all_results
                         )
-                    ),
-                    HumanMessage(
-                        content=(
-                            f"Business concept: {biz}\n"
-                            f"Geography: {geo}\n"
-                            f"Business model: {model_type}\n"
-                            f"{user_competitors_note}\n"
-                            f"Search results ({len(all_results)} total):\n{results_context}"
-                        )
-                    ),
-                ]
-            )
+                    ],
+                    middleware=[TodoListMiddleware(), TodoSSEMiddleware(queue, fi.study_id, _AGENT)],
+                    system_prompt=system_prompt,
+                    human_message=human_message,
+                    output_schema=_CompetitiveLLMOutput,
+                    model_call_limit=self._settings.phase_model_call_limit,
+                )
+            else:
+                structured_llm = self._llm.with_structured_output(_CompetitiveLLMOutput)
+                llm_out = await structured_llm.ainvoke(
+                    [SystemMessage(content=system_prompt), HumanMessage(content=human_message)]
+                )
+        except DeepAgentPhaseError:
+            raise
         except Exception as exc:
             raise AgentSoftError(f"Competitive analysis LLM call failed: {exc}") from exc
 

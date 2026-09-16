@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import uuid
 
 import pytest
@@ -9,6 +10,18 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import app.config
+
+# Force LangSmith tracing off for the whole test session, regardless of the
+# developer's real .env (which has real tracing credentials) — every agent
+# function is now @traceable-decorated, and langsmith's own tracing_is_enabled()
+# check is functools.lru_cache'd, so a real LANGSMITH_TRACING=true picked up
+# by an early get_settings() call would otherwise stick (cached) for the rest
+# of the session even after a later test's monkeypatch reverts the env var,
+# risking real traces posted to the developer's real LangSmith project from a
+# test run. Individual tests (e.g. test_config.py) still explicitly set their
+# own LANGSMITH_* values per-test via monkeypatch, which takes precedence.
+os.environ["LANGSMITH_TRACING"] = "false"
+os.environ.pop("LANGSMITH_API_KEY", None)
 
 
 @pytest.fixture

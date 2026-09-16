@@ -44,9 +44,11 @@ from typing import Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langsmith import traceable
 from pydantic import BaseModel
 
 from app.agents.base import AgentName
+from app.agents.deep_agent_factory import DeepAgentPhaseError, run_structured_deep_agent
 from app.config import get_settings
 from app.schemas.common import Citation, ClaimType
 from app.schemas.intake import FeasibilityInput
@@ -328,6 +330,7 @@ class CitationValidationAgent:
             google_api_key=s.google_api_key,
             temperature=0,
         )
+        self._settings = s
 
     # ── Tier B: narrative faithfulness (one batched LLM call) ─────────────────
 
@@ -414,28 +417,35 @@ class CitationValidationAgent:
             for i, item in enumerate(items_to_check)
         )
 
-        structured_llm = self._llm.with_structured_output(_FaithfulnessReport)
+        system_prompt = (
+            "You are a QC auditor verifying that narrative text in a feasibility "
+            "report is faithful to its source data. For each item, return "
+            "is_faithful=true if the text accurately represents the source, "
+            "false if it contains factual errors, invented numbers, or misleading "
+            "characterizations. Be precise — minor wording differences are fine; "
+            "only flag genuine factual inconsistencies."
+        )
+        human_message = (
+            f"Source data:\n{source_context}\n\n"
+            f"Items to verify ({len(items_to_check)} total):\n\n{checks_text}"
+        )
         try:
-            report: _FaithfulnessReport = await structured_llm.ainvoke(
-                [
-                    SystemMessage(
-                        content=(
-                            "You are a QC auditor verifying that narrative text in a feasibility "
-                            "report is faithful to its source data. For each item, return "
-                            "is_faithful=true if the text accurately represents the source, "
-                            "false if it contains factual errors, invented numbers, or misleading "
-                            "characterizations. Be precise — minor wording differences are fine; "
-                            "only flag genuine factual inconsistencies."
-                        )
-                    ),
-                    HumanMessage(
-                        content=(
-                            f"Source data:\n{source_context}\n\n"
-                            f"Items to verify ({len(items_to_check)} total):\n\n{checks_text}"
-                        )
-                    ),
-                ]
-            )
+            if self._settings.deepagents_enabled:
+                report: _FaithfulnessReport = await run_structured_deep_agent(
+                    model=self._llm,
+                    tools=[],
+                    system_prompt=system_prompt,
+                    human_message=human_message,
+                    output_schema=_FaithfulnessReport,
+                    model_call_limit=self._settings.phase_model_call_limit,
+                )
+            else:
+                structured_llm = self._llm.with_structured_output(_FaithfulnessReport)
+                report = await structured_llm.ainvoke(
+                    [SystemMessage(content=system_prompt), HumanMessage(content=human_message)]
+                )
+        except DeepAgentPhaseError:
+            raise
         except Exception as exc:
             logger.warning("Faithfulness check LLM call failed: %s", exc)
             return flags
@@ -505,31 +515,38 @@ class CitationValidationAgent:
             f"[{i}] {c}" for i, c in enumerate(contradictions)
         )
 
-        structured_llm = self._llm.with_structured_output(_ContradictionReport)
+        system_prompt = (
+            "You are a QC auditor verifying contradiction statements in a "
+            "feasibility study. For each contradiction, check:\n"
+            "1. Does it accurately reference real data from the source?\n"
+            "2. Is the tension it describes real (not fabricated)?\n"
+            "Return accurately_stated=true if the contradiction correctly "
+            "characterizes a genuine tension in the data. "
+            "Return false only if it misstates specific figures or invents "
+            "a conflict that doesn't exist in the source data."
+        )
+        human_message = (
+            f"Source data facts:\n{source_summary}\n\n"
+            f"Contradiction statements to verify ({len(contradictions)}):\n"
+            f"{contras_text}"
+        )
         try:
-            report: _ContradictionReport = await structured_llm.ainvoke(
-                [
-                    SystemMessage(
-                        content=(
-                            "You are a QC auditor verifying contradiction statements in a "
-                            "feasibility study. For each contradiction, check:\n"
-                            "1. Does it accurately reference real data from the source?\n"
-                            "2. Is the tension it describes real (not fabricated)?\n"
-                            "Return accurately_stated=true if the contradiction correctly "
-                            "characterizes a genuine tension in the data. "
-                            "Return false only if it misstates specific figures or invents "
-                            "a conflict that doesn't exist in the source data."
-                        )
-                    ),
-                    HumanMessage(
-                        content=(
-                            f"Source data facts:\n{source_summary}\n\n"
-                            f"Contradiction statements to verify ({len(contradictions)}):\n"
-                            f"{contras_text}"
-                        )
-                    ),
-                ]
-            )
+            if self._settings.deepagents_enabled:
+                report: _ContradictionReport = await run_structured_deep_agent(
+                    model=self._llm,
+                    tools=[],
+                    system_prompt=system_prompt,
+                    human_message=human_message,
+                    output_schema=_ContradictionReport,
+                    model_call_limit=self._settings.phase_model_call_limit,
+                )
+            else:
+                structured_llm = self._llm.with_structured_output(_ContradictionReport)
+                report = await structured_llm.ainvoke(
+                    [SystemMessage(content=system_prompt), HumanMessage(content=human_message)]
+                )
+        except DeepAgentPhaseError:
+            raise
         except Exception as exc:
             logger.warning("Contradiction verification LLM call failed: %s", exc)
             return [], None
@@ -619,39 +636,48 @@ class CitationValidationAgent:
             for it in items
         )
 
-        structured_llm = self._llm.with_structured_output(_RelevanceReport)
+        system_prompt = (
+            "You are a skeptical QC auditor checking whether a citation "
+            "genuinely supports a specific claim in a feasibility report — "
+            "not just whether it's topically related to the same industry. "
+            "Default to is_relevant=false unless the citation content "
+            "clearly and specifically supports THIS claim about THIS named "
+            "entity.\n"
+            "The 'Methodology' text inside each claim was written by the "
+            "same model that selected the citation — if it admits a "
+            "mismatch (different company, different city/country, "
+            "different industry, hedges with words like 'not', 'while', "
+            "'however', 'despite', or otherwise concedes the citation is "
+            "about something else), you MUST return is_relevant=false and "
+            "quote the admission back in `issue`. Do not give the benefit "
+            "of the doubt merely because the citation is in the same "
+            "general industry — e.g. a citation about a same-named company "
+            "in a different country, or an unrelated company entirely, is "
+            "NOT relevant even if both are 'coffee' or 'tech' businesses.\n"
+            "Example — irrelevant: claim is about competitor 'Toucano' in "
+            "Cairo; methodology says 'result [4] places Tucano Coffee in "
+            "Turkey' -> is_relevant=false, issue='Cited source describes a "
+            "Turkey-based business, not the named Cairo competitor.'\n"
+            "Return exactly one item per item_id given."
+        )
+        human_message = f"Items to verify ({len(items)} total):\n\n{items_text}"
         try:
-            report: _RelevanceReport = await structured_llm.ainvoke(
-                [
-                    SystemMessage(
-                        content=(
-                            "You are a skeptical QC auditor checking whether a citation "
-                            "genuinely supports a specific claim in a feasibility report — "
-                            "not just whether it's topically related to the same industry. "
-                            "Default to is_relevant=false unless the citation content "
-                            "clearly and specifically supports THIS claim about THIS named "
-                            "entity.\n"
-                            "The 'Methodology' text inside each claim was written by the "
-                            "same model that selected the citation — if it admits a "
-                            "mismatch (different company, different city/country, "
-                            "different industry, hedges with words like 'not', 'while', "
-                            "'however', 'despite', or otherwise concedes the citation is "
-                            "about something else), you MUST return is_relevant=false and "
-                            "quote the admission back in `issue`. Do not give the benefit "
-                            "of the doubt merely because the citation is in the same "
-                            "general industry — e.g. a citation about a same-named company "
-                            "in a different country, or an unrelated company entirely, is "
-                            "NOT relevant even if both are 'coffee' or 'tech' businesses.\n"
-                            "Example — irrelevant: claim is about competitor 'Toucano' in "
-                            "Cairo; methodology says 'result [4] places Tucano Coffee in "
-                            "Turkey' -> is_relevant=false, issue='Cited source describes a "
-                            "Turkey-based business, not the named Cairo competitor.'\n"
-                            "Return exactly one item per item_id given."
-                        )
-                    ),
-                    HumanMessage(content=f"Items to verify ({len(items)} total):\n\n{items_text}"),
-                ]
-            )
+            if self._settings.deepagents_enabled:
+                report: _RelevanceReport = await run_structured_deep_agent(
+                    model=self._llm,
+                    tools=[],
+                    system_prompt=system_prompt,
+                    human_message=human_message,
+                    output_schema=_RelevanceReport,
+                    model_call_limit=self._settings.phase_model_call_limit,
+                )
+            else:
+                structured_llm = self._llm.with_structured_output(_RelevanceReport)
+                report = await structured_llm.ainvoke(
+                    [SystemMessage(content=system_prompt), HumanMessage(content=human_message)]
+                )
+        except DeepAgentPhaseError:
+            raise
         except Exception as exc:
             logger.warning("Citation relevance check LLM call failed: %s", exc)
             return flags
@@ -705,6 +731,7 @@ class CitationValidationAgent:
 
     # ── Main run ──────────────────────────────────────────────────────────────
 
+    @traceable(name="Citation QC Agent", run_type="chain")
     async def run(
         self,
         fi: FeasibilityInput,

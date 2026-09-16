@@ -25,6 +25,8 @@ class FeasibilitySynthesisOutput(BaseModel):
     key_risks: list[str]            # 3-5 items in output_language
     data_gaps: list[str]            # explicitly listed null/unavailable fields
     contradictions: list[str]       # internal cross-section contradictions, or []
+    demand_assumption_flagged: bool = False  # True when the financial model's demand
+    # assumption was found inconsistent with market data during the contradiction check
     rationale: LocalizedText        # why this verdict was reached
 
     claim_types: dict[str, ClaimType] = {

@@ -3,11 +3,15 @@ from __future__ import annotations
 import logging
 from typing import Literal
 
+from langchain.agents.middleware import TodoListMiddleware
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langsmith import traceable
 from pydantic import BaseModel
 
 from app.agents.base import AgentName, AgentSoftError, gather_searches_with_sse
+from app.agents.deep_agent_factory import DeepAgentPhaseError, run_structured_deep_agent
+from app.agents.deep_agent_tools import TodoSSEMiddleware, make_tavily_search_tool
 from app.config import get_settings
 from app.schemas.common import ClaimType
 from app.schemas.intake import FeasibilityInput
@@ -97,6 +101,7 @@ class MarketSizingAgent:
         )
         self._settings = s
 
+    @traceable(name="Market Sizing Agent", run_type="chain")
     async def run(self, fi: FeasibilityInput, queue: EventQueue) -> MarketSizingOutput:
         await queue.put(SSEEvent.AGENT_STARTED, {"agent": _AGENT, "study_id": fi.study_id})
 
@@ -134,47 +139,65 @@ class MarketSizingAgent:
         )
 
         # ── LLM extraction ────────────────────────────────────────────────────
-        structured_llm = self._llm.with_structured_output(_MarketLLMOutput)
+        system_prompt = (
+            "You are a market analyst producing a feasibility study section.\n"
+            "Using the numbered search results provided, estimate TAM, SAM, and SOM "
+            "for the described business. Definitions:\n"
+            "  TAM = total global/regional market for this product category\n"
+            "  SAM = portion of TAM reachable given geography + business model\n"
+            "  SOM = realistically obtainable share in the first 3–5 years\n"
+            "For each figure, choose the best-fit citation_index (0-based index "
+            "from the results list), or null if no result supports it.\n"
+            "For EACH figure (tam, sam, som) and for growth_rate_cagr, also write a "
+            "`methodology` sentence (<=25 words) naming WHAT the cited result "
+            "specifically states that supports this number — e.g. "
+            "'Cited result [i] states the market was valued at $X in 2024' — not a "
+            "vague 'see source [i]'. A reviewer must be able to check the citation "
+            "actually says this. If citation_index is null, methodology must say so "
+            "plainly, e.g. 'No result specifically sizes this market; value withheld.'\n"
+            f"Write narrative and key_insights entirely in language: {fi.output_language}.\n"
+            f"{ENGLISH_ONLY_TERMS_NOTE}\n"
+            "If data is insufficient, set value to null and confidence to 'low'.\n"
+            "HARD RULE — value requires a citation: set value to null (and confidence "
+            "to 'low') whenever citation_index is null. A number MUST NEVER appear "
+            "without a resolved citation backing it. Never invent a number to fill a "
+            "gap; '[DATA UNAVAILABLE]' is always an acceptable answer.\n"
+            "If, after reviewing the results, a specific figure (e.g. SAM or the "
+            "growth rate) still has no supporting citation, you may call "
+            "tavily_search once or twice with a narrowly targeted follow-up query "
+            "to try to fill that specific gap before finalizing — do not re-run "
+            "searches that already returned results, and do not iterate for its "
+            "own sake when the existing results are already sufficient."
+        )
+        human_message = (
+            f"Business: {biz}\n"
+            f"Geography: {geo}\n"
+            f"Business model: {model_type}\n"
+            f"Analysis horizon: {fi.analysis_horizon_years} years\n\n"
+            f"Search results ({len(all_results)} total):\n{results_context}"
+        )
         try:
-            llm_out: _MarketLLMOutput = await structured_llm.ainvoke(
-                [
-                    SystemMessage(
-                        content=(
-                            "You are a market analyst producing a feasibility study section.\n"
-                            "Using the numbered search results provided, estimate TAM, SAM, and SOM "
-                            "for the described business. Definitions:\n"
-                            "  TAM = total global/regional market for this product category\n"
-                            "  SAM = portion of TAM reachable given geography + business model\n"
-                            "  SOM = realistically obtainable share in the first 3–5 years\n"
-                            "For each figure, choose the best-fit citation_index (0-based index "
-                            "from the results list), or null if no result supports it.\n"
-                            "For EACH figure (tam, sam, som) and for growth_rate_cagr, also write a "
-                            "`methodology` sentence (<=25 words) naming WHAT the cited result "
-                            "specifically states that supports this number — e.g. "
-                            "'Cited result [i] states the market was valued at $X in 2024' — not a "
-                            "vague 'see source [i]'. A reviewer must be able to check the citation "
-                            "actually says this. If citation_index is null, methodology must say so "
-                            "plainly, e.g. 'No result specifically sizes this market; value withheld.'\n"
-                            f"Write narrative and key_insights entirely in language: {fi.output_language}.\n"
-                            f"{ENGLISH_ONLY_TERMS_NOTE}\n"
-                            "If data is insufficient, set value to null and confidence to 'low'.\n"
-                            "HARD RULE — value requires a citation: set value to null (and confidence "
-                            "to 'low') whenever citation_index is null. A number MUST NEVER appear "
-                            "without a resolved citation backing it. Never invent a number to fill a "
-                            "gap; '[DATA UNAVAILABLE]' is always an acceptable answer."
+            if self._settings.deepagents_enabled:
+                llm_out: _MarketLLMOutput = await run_structured_deep_agent(
+                    model=self._llm,
+                    tools=[
+                        make_tavily_search_tool(
+                            queue, fi.study_id, _AGENT, self._settings.tavily_api_key, all_results
                         )
-                    ),
-                    HumanMessage(
-                        content=(
-                            f"Business: {biz}\n"
-                            f"Geography: {geo}\n"
-                            f"Business model: {model_type}\n"
-                            f"Analysis horizon: {fi.analysis_horizon_years} years\n\n"
-                            f"Search results ({len(all_results)} total):\n{results_context}"
-                        )
-                    ),
-                ]
-            )
+                    ],
+                    middleware=[TodoListMiddleware(), TodoSSEMiddleware(queue, fi.study_id, _AGENT)],
+                    system_prompt=system_prompt,
+                    human_message=human_message,
+                    output_schema=_MarketLLMOutput,
+                    model_call_limit=self._settings.phase_model_call_limit,
+                )
+            else:
+                structured_llm = self._llm.with_structured_output(_MarketLLMOutput)
+                llm_out = await structured_llm.ainvoke(
+                    [SystemMessage(content=system_prompt), HumanMessage(content=human_message)]
+                )
+        except DeepAgentPhaseError:
+            raise
         except Exception as exc:
             raise AgentSoftError(f"Market sizing LLM call failed: {exc}") from exc
 

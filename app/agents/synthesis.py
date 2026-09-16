@@ -5,9 +5,11 @@ from typing import Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langsmith import traceable
 from pydantic import BaseModel
 
 from app.agents.base import AgentName, AgentSoftError
+from app.agents.deep_agent_factory import DeepAgentPhaseError, run_structured_deep_agent
 from app.config import get_settings
 from app.schemas.intake import FeasibilityInput
 from app.schemas.market import CompetitiveAnalysisOutput, MarketSizingOutput
@@ -32,6 +34,8 @@ class _SynthesisLLMOutput(BaseModel):
     key_risks: list[str]          # 3–5 items in output_language
     data_gaps: list[str]          # null/missing fields explicitly listed
     contradictions: list[str]     # cross-section contradictions, or []
+    demand_assumption_flagged: bool = False  # True when the demand-assumption vs.
+    # market-data consistency check (see CONTRADICTION CHECK below) found an issue
     rationale: str                # why this verdict, in output_language
 
 
@@ -187,7 +191,9 @@ class FeasibilitySynthesisAgent:
             google_api_key=s.google_api_key,
             temperature=0,
         )
+        self._settings = s
 
+    @traceable(name="Synthesis Agent", run_type="chain")
     async def run(
         self,
         fi: FeasibilityInput,
@@ -235,6 +241,9 @@ class FeasibilitySynthesisAgent:
             "   Also check: if competitive analysis shows high saturation but market shows\n"
             "   high growth, or if financial assumptions contradict market data — flag each.\n"
             "   Empty list is fine if no genuine contradiction found.\n"
+            "   Additionally, set demand_assumption_flagged=true when this specific demand-\n"
+            "   assumption-vs-market-data check finds an inconsistency (including when SAM is\n"
+            "   unavailable and the assumption cannot be validated); otherwise leave it false.\n"
             "\n"
             f"3. PRE-COMPUTED CONFIDENCE SCORE = {conf_bd.final_score:.2f}\n"
             "   This number is deterministic and already correct (computed from citation\n"
@@ -258,34 +267,41 @@ class FeasibilitySynthesisAgent:
         ])
 
         # ── 3. LLM synthesis call ──────────────────────────────────────────────
-        structured_llm = self._llm.with_structured_output(_SynthesisLLMOutput)
+        system_prompt = (
+            "You are a senior business analyst writing the executive summary "
+            "and final recommendation for a feasibility study.\n"
+            "You will receive all prior analysis sections and a pre-computed "
+            "confidence score. Your job is to synthesize the findings, identify "
+            "contradictions between sections, and produce an actionable verdict.\n"
+            f"Write ALL text fields in language: {fi.output_language}.\n"
+            f"{ENGLISH_ONLY_TERMS_NOTE}\n\n"
+            f"{null_guard}"
+        )
+        human_message = (
+            f"Business: {fi.business_description.value}\n"
+            f"Geography: {fi.target_market_geography.value or 'global'}\n"
+            f"Model: {fi.business_model_type.value or 'unspecified'}\n"
+            f"Analysis horizon: {fi.analysis_horizon_years} years\n"
+            f"Confidence score (pre-computed): {conf_bd.final_score:.2f}\n\n"
+            f"=== All Analysis Sections ===\n\n{full_context}"
+        )
         try:
-            llm_out: _SynthesisLLMOutput = await structured_llm.ainvoke(
-                [
-                    SystemMessage(
-                        content=(
-                            "You are a senior business analyst writing the executive summary "
-                            "and final recommendation for a feasibility study.\n"
-                            "You will receive all prior analysis sections and a pre-computed "
-                            "confidence score. Your job is to synthesize the findings, identify "
-                            "contradictions between sections, and produce an actionable verdict.\n"
-                            f"Write ALL text fields in language: {fi.output_language}.\n"
-                            f"{ENGLISH_ONLY_TERMS_NOTE}\n\n"
-                            f"{null_guard}"
-                        )
-                    ),
-                    HumanMessage(
-                        content=(
-                            f"Business: {fi.business_description.value}\n"
-                            f"Geography: {fi.target_market_geography.value or 'global'}\n"
-                            f"Model: {fi.business_model_type.value or 'unspecified'}\n"
-                            f"Analysis horizon: {fi.analysis_horizon_years} years\n"
-                            f"Confidence score (pre-computed): {conf_bd.final_score:.2f}\n\n"
-                            f"=== All Analysis Sections ===\n\n{full_context}"
-                        )
-                    ),
-                ]
-            )
+            if self._settings.deepagents_enabled:
+                llm_out: _SynthesisLLMOutput = await run_structured_deep_agent(
+                    model=self._llm,
+                    tools=[],
+                    system_prompt=system_prompt,
+                    human_message=human_message,
+                    output_schema=_SynthesisLLMOutput,
+                    model_call_limit=self._settings.phase_model_call_limit,
+                )
+            else:
+                structured_llm = self._llm.with_structured_output(_SynthesisLLMOutput)
+                llm_out = await structured_llm.ainvoke(
+                    [SystemMessage(content=system_prompt), HumanMessage(content=human_message)]
+                )
+        except DeepAgentPhaseError:
+            raise
         except Exception as exc:
             raise AgentSoftError(f"Synthesis LLM call failed: {exc}") from exc
 
@@ -302,6 +318,7 @@ class FeasibilitySynthesisAgent:
             key_risks=llm_out.key_risks,
             data_gaps=llm_out.data_gaps,
             contradictions=llm_out.contradictions,
+            demand_assumption_flagged=llm_out.demand_assumption_flagged,
             rationale=LocalizedText(text=llm_out.rationale, language=fi.output_language),
         )
 

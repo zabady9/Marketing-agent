@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langsmith import traceable
 from pydantic import BaseModel
 
+from app.agents.deep_agent_factory import DeepAgentPhaseError, run_structured_deep_agent
 from app.config import get_settings
 from app.schemas.intake import FeasibilityInput
 from app.schemas.report import (
@@ -75,7 +78,9 @@ class FinancialModelingAgent:
             google_api_key=s.google_api_key,
             temperature=0,
         )
+        self._settings = s
 
+    @traceable(name="Financial Modeling Agent", run_type="chain")
     async def run(
         self,
         fi: FeasibilityInput,
@@ -213,45 +218,86 @@ class FinancialModelingAgent:
             key_insights: list[str]
             risks_from_numbers: list[str]
 
-        structured_llm = self._llm.with_structured_output(_Narrative)
-        narrative_result: _Narrative = await structured_llm.ainvoke(
-            [
-                SystemMessage(
-                    content=(
-                        "You are a financial analyst writing a feasibility report section. "
-                        "You will be given pre-computed financial results. "
-                        "Your job is to write ONLY narrative interpretation — "
-                        "do NOT invent numbers; reference the computed values provided. "
-                        f"Write entirely in language code: {fi.output_language}. "
-                        f"{ENGLISH_ONLY_TERMS_NOTE}"
-                        + (
-                            "\n\nIMPORTANT: Some inputs (marked estimated) carry low "
-                            "confidence. Clearly note this uncertainty in your narrative."
-                            if any_low else ""
-                        )
-                    )
-                ),
-                HumanMessage(
-                    content=(
-                        f"Business: {fi.business_description.value}\n"
-                        f"Unit price: {unit_price} {fi.pricing_currency}\n"
-                        f"Monthly sales (estimated={fi.expected_monthly_sales.low_confidence}): "
-                        f"{monthly_sales}\n"
-                        f"Capex (estimated={fi.capex.low_confidence}): {capex} {fi.capex_currency}\n"
-                        f"Monthly opex (estimated={fi.opex_monthly.low_confidence}): "
-                        f"{opex_monthly} {fi.opex_monthly_currency}\n\n"
-                        f"COMPUTED RESULTS:\n"
-                        f"Break-even: {be_output['break_even_units']} units / "
-                        f"{be_output['break_even_months']} months\n"
-                        f"ROI year 1: {roi1_output['roi_percent']}%\n"
-                        f"ROI year {fi.analysis_horizon_years}: {roin_output['roi_percent']}%\n"
-                        f"NPV: {npv_output['npv']} (positive={npv_output['is_positive']})\n"
-                        f"Payback month: {cf_output['payback_month']}\n"
-                        f"Sensitivity: {sens_output['scenarios']}\n"
-                    )
-                ),
-            ]
+        system_prompt = (
+            "You are a financial analyst writing a feasibility report section. "
+            "You will be given pre-computed financial results. "
+            "Your job is to write ONLY narrative interpretation — "
+            "do NOT invent numbers; reference the computed values provided. "
+            f"Write entirely in language code: {fi.output_language}. "
+            f"{ENGLISH_ONLY_TERMS_NOTE}"
+            + (
+                "\n\nIMPORTANT: Some inputs (marked estimated) carry low "
+                "confidence. Clearly note this uncertainty in your narrative."
+                if any_low else ""
+            )
+            + (
+                "\n\nYou may `read_file` any `/calc/*.json` to double-check a "
+                "figure before writing about it; never state a number that "
+                "isn't in one of these files or in the message below."
+            )
         )
+        human_message = (
+            f"Business: {fi.business_description.value}\n"
+            f"Unit price: {unit_price} {fi.pricing_currency}\n"
+            f"Monthly sales (estimated={fi.expected_monthly_sales.low_confidence}): "
+            f"{monthly_sales}\n"
+            f"Capex (estimated={fi.capex.low_confidence}): {capex} {fi.capex_currency}\n"
+            f"Monthly opex (estimated={fi.opex_monthly.low_confidence}): "
+            f"{opex_monthly} {fi.opex_monthly_currency}\n\n"
+            f"COMPUTED RESULTS:\n"
+            f"Break-even: {be_output['break_even_units']} units / "
+            f"{be_output['break_even_months']} months\n"
+            f"ROI year 1: {roi1_output['roi_percent']}%\n"
+            f"ROI year {fi.analysis_horizon_years}: {roin_output['roi_percent']}%\n"
+            f"NPV: {npv_output['npv']} (positive={npv_output['is_positive']})\n"
+            f"Payback month: {cf_output['payback_month']}\n"
+            f"Sensitivity: {sens_output['scenarios']}\n"
+        )
+
+        # Narrative failure is a separate, independently-handled step from the
+        # calculator block above: the numbers are already valid Python-computed
+        # results by this point, so a narrative failure degrades this section
+        # (fallback text/empty lists) rather than aborting the whole financial
+        # phase. This is a deliberate behavior change from before, when a
+        # narrative-call exception propagated uncaught and would have aborted
+        # the phase like a calculator failure.
+        try:
+            if self._settings.deepagents_enabled:
+                seed_files: dict[str, str] = {
+                    "/calc/break_even.json": json.dumps(be_trace.model_dump()),
+                    "/calc/roi_year_1.json": json.dumps(roi1_trace.model_dump()),
+                    "/calc/roi_year_n.json": json.dumps(roin_trace.model_dump()),
+                    "/calc/npv.json": json.dumps(npv_trace.model_dump()),
+                    "/calc/sensitivity.json": json.dumps(sens_trace.model_dump()),
+                    "/calc/cash_flow.json": json.dumps(cf_trace.model_dump()),
+                    "/calc/cost_structure.json": json.dumps(cs_trace.model_dump()),
+                }
+                narrative_result: _Narrative = await run_structured_deep_agent(
+                    model=self._llm,
+                    tools=[],
+                    seed_files=seed_files,
+                    system_prompt=system_prompt,
+                    human_message=human_message,
+                    output_schema=_Narrative,
+                    model_call_limit=self._settings.phase_model_call_limit,
+                )
+            else:
+                structured_llm = self._llm.with_structured_output(_Narrative)
+                narrative_result = await structured_llm.ainvoke(
+                    [SystemMessage(content=system_prompt), HumanMessage(content=human_message)]
+                )
+        except DeepAgentPhaseError:
+            narrative_result = _Narrative(
+                summary="[Narrative unavailable]",
+                key_insights=[],
+                risks_from_numbers=[],
+            )
+        except Exception:
+            narrative_result = _Narrative(
+                summary="[Narrative unavailable]",
+                key_insights=[],
+                risks_from_numbers=[],
+            )
 
         narrative = LocalizedText(
             text=narrative_result.summary,

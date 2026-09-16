@@ -3,11 +3,15 @@ from __future__ import annotations
 import logging
 from typing import Literal
 
+from langchain.agents.middleware import TodoListMiddleware
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langsmith import traceable
 from pydantic import BaseModel
 
 from app.agents.base import AgentName, AgentSoftError, gather_searches_with_sse
+from app.agents.deep_agent_factory import DeepAgentPhaseError, run_structured_deep_agent
+from app.agents.deep_agent_tools import TodoSSEMiddleware, make_tavily_search_tool
 from app.config import get_settings
 from app.schemas.common import Citation, ClaimType
 from app.schemas.intake import FeasibilityInput
@@ -102,6 +106,7 @@ class RiskAssessmentAgent:
         )
         self._settings = s
 
+    @traceable(name="Risk Assessment Agent", run_type="chain")
     async def run(
         self,
         fi: FeasibilityInput,
@@ -147,45 +152,64 @@ class RiskAssessmentAgent:
         ])
 
         # ── 3 LLM risk identification ─────────────────────────────────────────
-        structured_llm = self._llm.with_structured_output(_RiskLLMOutput)
+        system_prompt = (
+            "You are a risk analyst producing a feasibility study section.\n"
+            "Identify 5–8 concrete risks across all categories "
+            "(market, financial, operational, regulatory, competitive, technology). "
+            "For each risk, assign probability and impact (high/medium/low), "
+            "and write a specific, actionable mitigation step.\n"
+            "Use citation_index (0-based) to reference search results "
+            "where they support a specific risk finding; null if not applicable.\n"
+            "For each risk, also write a `methodology` sentence (<=25 words) stating "
+            "the basis: 'Cited result [i] specifically states ...' (naming what it "
+            "says, not just 'see source [i]'), 'Reflects founder-stated concern', or "
+            f"'Analyst judgment based on typical risk patterns in {geo}' when neither a "
+            "citation nor a founder statement applies. Never claim a citation you did "
+            "not select as citation_index.\n"
+            f"Write ALL text in language: {fi.output_language}.\n"
+            f"{ENGLISH_ONLY_TERMS_NOTE}\n"
+            "Consider: null SAM/SOM = market size uncertainty is itself a risk.\n"
+            "Consider: negative ROI year 1 = financial runway risk.\n"
+            "Consider: reflect credible founder-stated risks/concerns as their "
+            "own risk entries rather than ignoring them.\n"
+            "If, after reviewing the results and prior analysis, a specific risk "
+            "remains unsupported — e.g. a founder-stated risk or regulatory concern "
+            "with no supporting citation — you may call tavily_search once or twice "
+            "with a narrowly targeted follow-up query to try to fill that specific "
+            "gap before finalizing — do not re-run searches that already returned "
+            "results, and do not iterate for its own sake when the existing results "
+            "are already sufficient."
+        )
+        human_message = (
+            f"Business: {biz}\n"
+            f"Geography: {geo}  |  Model: {model_type}\n"
+            f"Analysis horizon: {fi.analysis_horizon_years} years\n"
+            f"Founder-stated risks/concerns: {founder_risks}\n\n"
+            f"=== Prior Analysis ===\n{prior_context}\n\n"
+            f"=== Regulatory Search Results ===\n{results_context}"
+        )
         try:
-            llm_out: _RiskLLMOutput = await structured_llm.ainvoke(
-                [
-                    SystemMessage(
-                        content=(
-                            "You are a risk analyst producing a feasibility study section.\n"
-                            "Identify 5–8 concrete risks across all categories "
-                            "(market, financial, operational, regulatory, competitive, technology). "
-                            "For each risk, assign probability and impact (high/medium/low), "
-                            "and write a specific, actionable mitigation step.\n"
-                            "Use citation_index (0-based) to reference search results "
-                            "where they support a specific risk finding; null if not applicable.\n"
-                            "For each risk, also write a `methodology` sentence (<=25 words) stating "
-                            "the basis: 'Cited result [i] specifically states ...' (naming what it "
-                            "says, not just 'see source [i]'), 'Reflects founder-stated concern', or "
-                            f"'Analyst judgment based on typical risk patterns in {geo}' when neither a "
-                            "citation nor a founder statement applies. Never claim a citation you did "
-                            "not select as citation_index.\n"
-                            f"Write ALL text in language: {fi.output_language}.\n"
-                            f"{ENGLISH_ONLY_TERMS_NOTE}\n"
-                            "Consider: null SAM/SOM = market size uncertainty is itself a risk.\n"
-                            "Consider: negative ROI year 1 = financial runway risk.\n"
-                            "Consider: reflect credible founder-stated risks/concerns as their "
-                            "own risk entries rather than ignoring them."
+            if self._settings.deepagents_enabled:
+                llm_out: _RiskLLMOutput = await run_structured_deep_agent(
+                    model=self._llm,
+                    tools=[
+                        make_tavily_search_tool(
+                            queue, fi.study_id, _AGENT, self._settings.tavily_api_key, all_results
                         )
-                    ),
-                    HumanMessage(
-                        content=(
-                            f"Business: {biz}\n"
-                            f"Geography: {geo}  |  Model: {model_type}\n"
-                            f"Analysis horizon: {fi.analysis_horizon_years} years\n"
-                            f"Founder-stated risks/concerns: {founder_risks}\n\n"
-                            f"=== Prior Analysis ===\n{prior_context}\n\n"
-                            f"=== Regulatory Search Results ===\n{results_context}"
-                        )
-                    ),
-                ]
-            )
+                    ],
+                    middleware=[TodoListMiddleware(), TodoSSEMiddleware(queue, fi.study_id, _AGENT)],
+                    system_prompt=system_prompt,
+                    human_message=human_message,
+                    output_schema=_RiskLLMOutput,
+                    model_call_limit=self._settings.phase_model_call_limit,
+                )
+            else:
+                structured_llm = self._llm.with_structured_output(_RiskLLMOutput)
+                llm_out = await structured_llm.ainvoke(
+                    [SystemMessage(content=system_prompt), HumanMessage(content=human_message)]
+                )
+        except DeepAgentPhaseError:
+            raise
         except Exception as exc:
             raise AgentSoftError(f"Risk assessment LLM call failed: {exc}") from exc
 
