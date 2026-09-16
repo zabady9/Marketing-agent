@@ -590,10 +590,23 @@ export interface StudyState {
 
 export type StudyRunStatus = 'pending' | 'running' | 'completed' | 'failed'
 
+// "full" (the whole pipeline) or "single_phase" (one capability only, e.g.
+// via run_competitive_analysis_tool) — see requested_phase for which one.
+export type StudyType = 'full' | 'single_phase'
+export type StudyPhase = 'market_sizing' | 'competitive' | 'financial' | 'risk' | 'synthesis'
+
 export interface StudyResultResponse {
   id: string
   project_id: string
   status: StudyRunStatus
+  study_type: StudyType
+  // Set only when study_type === 'single_phase'; null for a full study.
+  requested_phase: StudyPhase | null
+  // LLM-generated, content-specific title (e.g. "Competitive Landscape: 5
+  // Direct Rivals in the US Meal-Kit Market") — null if generation failed/
+  // timed out, or for a run that never reached "completed". See
+  // getStudyTitle in lib/format.ts for the deterministic fallback used then.
+  title: string | null
   // Same envelope shape as SectionStore — only sections that completed are
   // present, whether the run finished cleanly or hit a fatal failure partway.
   sections: SectionStore

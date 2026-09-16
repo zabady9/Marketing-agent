@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { useReactToPrint } from 'react-to-print'
 import { getProject, getStudyById, StudyNotFoundError } from '../api'
 import type { ProjectSummary, StudyResultResponse } from '../types'
-import { formatDate, formatPercent } from '../lib/format'
+import { formatDate, formatPercent, getStudyTitle } from '../lib/format'
 import { isRtlLanguage } from '../lib/rtl'
 import { MarketOverviewSection } from '../components/report/sections/MarketOverviewSection'
 import { CompetitiveLandscapeSection } from '../components/report/sections/CompetitiveLandscapeSection'
@@ -235,7 +235,7 @@ export function StudyReportPage() {
           {/* Cover block */}
           <div className="rounded-xl border border-gray-200 bg-white p-6">
             <p className="text-xs font-medium text-gray-400 uppercase tracking-wide">
-              Feasibility Study Report
+              {getStudyTitle(study)}
             </p>
             <h1 className="mt-1 text-2xl font-semibold text-gray-900 tracking-tight">
               {project?.name ?? 'Untitled Project'}

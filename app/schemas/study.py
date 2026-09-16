@@ -11,6 +11,9 @@ class StudyResultResponse(BaseModel):
     id: str
     project_id: str
     status: str
+    study_type: str
+    requested_phase: str | None
+    title: str | None
     sections: dict
     verdict: str | None
     confidence_score: float | None

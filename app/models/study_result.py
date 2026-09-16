@@ -27,6 +27,23 @@ class StudyResult(Base):
 
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
 
+    # "full" (the whole pipeline) or "single_phase" (just one section, via
+    # run_pipeline_phase_tool / run_single_phase_study) — lets callers (e.g.
+    # the study-context digest injected into chat) distinguish a deliberate
+    # partial run from a complete study rather than just checking whether
+    # `sections` is non-empty. `requested_phase` names which phase for a
+    # single_phase row; always None for a full run.
+    study_type: Mapped[str] = mapped_column(String(16), nullable=False, default="full", server_default="full")
+    requested_phase: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+    # LLM-generated, content-specific title (e.g. "Competitive Landscape:
+    # 5 Direct Rivals in the US Meal-Kit Market") — see
+    # app.services.study_title.generate_study_title. Null when generation
+    # failed/timed out (fell back to a deterministic label instead, computed
+    # client-side — see frontend's getStudyTitle) or for a run that never
+    # reached "completed".
+    title: Mapped[str | None] = mapped_column(String(160), nullable=True)
+
     # {"market_overview": {...}, "competitive_landscape": {...},
     #  "financial_feasibility": {...}, "risk_assessment": {...},
     #  "executive_summary": {...}} — only sections that completed are present.

@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { getBusinessProfile, listStudies } from '../api'
-import { formatDate } from '../lib/format'
+import { formatDate, getStudyTitle } from '../lib/format'
 import type { BusinessProfile, StudyResultResponse } from '../types'
 
 type LoadState = 'loading' | 'loaded' | 'error'
@@ -34,7 +34,7 @@ function StudyRow({ projectId, study }: { projectId: string; study: StudyResultR
     <div className="flex items-center justify-between gap-4 py-2 first:pt-0 last:pb-0">
       <div>
         <div className="flex items-center gap-2">
-          <p className="text-sm font-medium text-gray-900">Feasibility Study Report</p>
+          <p className="text-sm font-medium text-gray-900">{getStudyTitle(study)}</p>
           <span
             className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-medium whitespace-nowrap ${
               STUDY_STATUS_CLASSES[study.status] ?? 'bg-gray-100 text-gray-600'
