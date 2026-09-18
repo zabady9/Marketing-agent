@@ -1,9 +1,33 @@
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
-import { listProjects } from '../api'
+import { Link, useNavigate } from 'react-router-dom'
+import { createChatSession, createProject, listProjects } from '../api'
 import type { ProjectSummary } from '../types'
 
 type LoadState = 'loading' | 'loaded' | 'error'
+
+function NewProjectButton({ className, children }: { className: string; children: React.ReactNode }) {
+  const navigate = useNavigate()
+  const [creating, setCreating] = useState(false)
+
+  const handleClick = () => {
+    if (creating) return
+    setCreating(true)
+    createProject()
+      .then((projectId) => createChatSession(projectId).then((session) => ({ projectId, session })))
+      .then(({ projectId, session }) => {
+        navigate(`/projects/${projectId}/chat/${session.id}`)
+      })
+      .catch(() => {
+        setCreating(false)
+      })
+  }
+
+  return (
+    <button type="button" onClick={handleClick} disabled={creating} className={className}>
+      {creating ? 'Creating…' : children}
+    </button>
+  )
+}
 
 export function ProjectsListPage() {
   const [projects, setProjects] = useState<ProjectSummary[]>([])
@@ -37,12 +61,9 @@ export function ProjectsListPage() {
             <Link to="/admin" className="text-sm text-gray-500 hover:text-gray-700">
               Admin
             </Link>
-            <Link
-              to="/projects/new"
-              className="rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 transition-colors"
-            >
+            <NewProjectButton className="rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 transition-colors">
               + New Project
-            </Link>
+            </NewProjectButton>
           </div>
         </div>
 
@@ -57,12 +78,9 @@ export function ProjectsListPage() {
         {state === 'loaded' && projects.length === 0 && (
           <div className="rounded-xl border border-dashed border-gray-300 bg-white px-6 py-16 text-center">
             <p className="text-gray-500 mb-4">No projects yet.</p>
-            <Link
-              to="/projects/new"
-              className="inline-block rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 transition-colors"
-            >
+            <NewProjectButton className="inline-block rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 transition-colors">
               Create your first project
-            </Link>
+            </NewProjectButton>
           </div>
         )}
 

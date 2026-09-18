@@ -4,7 +4,6 @@ import { ChatPage } from './pages/ChatPage'
 import { ChatRedirect } from './pages/ChatRedirect'
 import { MemoryPage } from './pages/MemoryPage'
 import { ProjectsListPage } from './pages/ProjectsListPage'
-import { QuestionnairePage } from './pages/QuestionnairePage'
 import { StudyReportPage } from './pages/StudyReportPage'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { AdminLayout } from './pages/admin/AdminLayout'
@@ -21,7 +20,6 @@ export function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<ProjectsListPage />} />
-          <Route path="/projects/new" element={<QuestionnairePage />} />
           <Route path="/projects/:projectId" element={<BusinessProfilePage />} />
           <Route path="/projects/:projectId/chat" element={<ChatRedirect />} />
           <Route path="/projects/:projectId/chat/:sessionId" element={<ChatPage />} />

@@ -7,11 +7,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
-from app.agents.intake import IntakeHardBlockError
 from app.db import SessionLocal, get_db
 from app.models import StudyResult
 from app.schemas.chat import ChatMessageCreate, ChatMessageResponse, ChatSessionResponse
-from app.schemas.intake import FeasibilityStartRequest
 from app.schemas.project import (
     BusinessProfileResponse,
     BusinessProfileUpdate,
@@ -31,7 +29,7 @@ from app.services.chat import (
 from app.services.chat_agent import run_chat_turn
 from app.services.project import (
     business_profile_to_response,
-    create_project_from_questionnaire,
+    create_bare_project,
     get_business_profile,
     get_project,
     list_projects,
@@ -46,15 +44,11 @@ router = APIRouter(prefix="/projects", tags=["projects"])
 
 
 @router.post("", response_model=ProjectCreateResponse, status_code=201)
-async def create_project(
-    request: FeasibilityStartRequest, db: Session = Depends(get_db)
-) -> ProjectCreateResponse:
-    try:
-        project = await create_project_from_questionnaire(db, request)
-    except IntakeHardBlockError as exc:
-        raise HTTPException(
-            status_code=422, detail={"field": exc.field, "reason": str(exc)}
-        ) from exc
+def create_project(db: Session = Depends(get_db)) -> ProjectCreateResponse:
+    """Creates a bare project with no business profile yet — chat gathers
+    the profile conversationally afterward via bootstrap_profile_tool. There
+    is no wizard/form-based creation path; this is the only entry point."""
+    project = create_bare_project(db)
     return ProjectCreateResponse(project_id=project.id)
 
 

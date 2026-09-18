@@ -56,6 +56,9 @@ class TestCapabilityToolsAreIndependent:
             "update_business_profile_tool",
             "remember_fact_tool",
             "generate_chart_tool",
+            "web_research_tool",
+            "explain_figure_tool",
+            "run_scenario_simulation_tool",
         }
         # run_pipeline_phase_tool's phase argument is gone — verify none of
         # the new capability tools still expose one (that ambiguity is

@@ -58,6 +58,7 @@ class BusinessProfileResponse(BaseModel):
     marketing_channels: SourcedValue
     study_goal: SourcedValue
     analysis_horizon_years: int
+    additional_context: str | None
 
     created_at: datetime
     updated_at: datetime
@@ -96,3 +97,6 @@ class BusinessProfileUpdate(BaseModel):
     marketing_channels: list[str] | None = None
     study_goal: str | None = None
     analysis_horizon_years: int | None = None
+    # Unlike every other field above (overwrite), this one is APPENDED to by
+    # update_business_profile — see that function's docstring.
+    additional_context: str | None = None

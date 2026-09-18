@@ -4,7 +4,6 @@ import type {
   ChatSessionRecord,
   MemoryEntry,
   ProjectSummary,
-  StartStudyRequest,
   StudyResultResponse,
 } from './types'
 
@@ -30,20 +29,16 @@ export async function listProjects(): Promise<ProjectSummary[]> {
   return (await res.json()) as ProjectSummary[]
 }
 
-// Thrown when project creation hard-blocks on a specific field (currently only
-// pricing_unit_price) — carries the field name so the UI can surface the error
-// inline next to that field instead of a generic message.
-export class FieldError extends Error {
-  field: string
-
-  constructor(field: string, reason: string) {
-    super(reason)
-    this.field = field
-  }
-}
+// Thrown specifically on a 404 (project exists, but chat hasn't built its
+// business profile yet) so BusinessProfilePage can redirect into chat
+// instead of showing a dead-end error for what's actually a normal state.
+export class ProfileNotFoundError extends Error {}
 
 export async function getBusinessProfile(projectId: string): Promise<BusinessProfile> {
   const res = await fetch(`${BASE}/api/projects/${projectId}/business-profile`)
+  if (res.status === 404) {
+    throw new ProfileNotFoundError('Business profile not found')
+  }
   if (!res.ok) {
     throw new Error(await errorMessageFor(res))
   }
@@ -82,16 +77,8 @@ export async function getStudyById(projectId: string, studyId: string): Promise<
   return (await res.json()) as StudyResultResponse
 }
 
-export async function createProject(payload: StartStudyRequest): Promise<string> {
-  const res = await fetch(`${BASE}/api/projects`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  })
-  if (res.status === 422) {
-    const body = (await res.json()) as { detail?: { field?: string; reason?: string } }
-    throw new FieldError(body.detail?.field ?? 'unknown', body.detail?.reason ?? 'Validation failed.')
-  }
+export async function createProject(): Promise<string> {
+  const res = await fetch(`${BASE}/api/projects`, { method: 'POST' })
   if (!res.ok) {
     throw new Error(await errorMessageFor(res))
   }

@@ -13,16 +13,20 @@ from langsmith import traceable
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
+from app.agents.financial import FinancialCalcError, run_full_financial_model
+from app.agents.intake import IntakeHardBlockError
 from app.config import get_settings
 from app.models import ChatMessage, ChatSession, MemoryEntry, Project, StudyResult
 from app.schemas.chart import ChartSeries, ChartSpec
+from app.schemas.intake import FeasibilityStartRequest, Source
 from app.schemas.project import BusinessProfileUpdate
 from app.services.chat import get_latest_study_id_for_session, maybe_set_title
 from app.services.memory import add_memory_entry, list_memory_entries
-from app.services.project import update_business_profile
+from app.services.project import populate_business_profile, update_business_profile
 from app.services.study import run_feasibility_study, run_single_phase_study
 from app.services.tool_intent import detect_single_tool_intent
 from app.sse import EventQueue, SSEEvent
+from app.tools import web_search
 
 logger = logging.getLogger(__name__)
 
@@ -43,8 +47,104 @@ _FALLBACK_MESSAGE = (
 _FLUSH_INTERVAL_SECONDS = 0.3
 
 
+def _bootstrap_system_prompt(memory_entries: list[MemoryEntry]) -> str:
+    """Used while project.business_profile is still None — chat's job right
+    now is to have a natural conversation and build the profile for the
+    first time via bootstrap_profile_tool, not to answer questions about
+    data that doesn't exist yet (see _build_tools's profile-existence
+    branch, which only offers bootstrap_profile_tool and web_research_tool
+    until this succeeds)."""
+    memory_section = (
+        "\n\nWhat you remember about this user across all projects:\n"
+        + "\n".join(f"- {m.content}" for m in memory_entries)
+        if memory_entries
+        else ""
+    )
+    return (
+        "You are a business analyst assistant. This is a brand new project "
+        "with no business profile yet — your job right now is to have a "
+        "natural conversation to learn about the user's business idea, not "
+        "to fill out a form. If they haven't described their business yet, "
+        "ask them to in their own words. As they talk, use web_research_tool "
+        "to look things up that help you ask better questions (e.g. typical "
+        "pricing or costs for this kind of business) instead of asking cold. "
+        "Once you have at least a clear description of the business AND a "
+        "price per unit/subscription/transaction, call bootstrap_profile_tool "
+        "with everything you've learned so far — pass every field you "
+        "already know, not just those two. If bootstrap_profile_tool tells "
+        "you it still needs the price, ask the user for it and call the tool "
+        "again once you have it. Keep the conversation natural — a couple of "
+        "questions at a time, not an interrogation." + memory_section
+    )
+
+
+# Fields with an objective, look-up-able answer — chat may research these
+# itself (via web_research_tool) if the user doesn't know. capex/opex/
+# expected_monthly_sales are reconsidered when flagged low_confidence (an
+# earlier rough estimate); competitors when the list is still empty.
+_RESEARCHABLE_GAP_LABELS: dict[str, str] = {
+    "competitors": "competitors",
+    "capex_low_confidence": "capex (currently just a rough estimate)",
+    "opex_monthly_low_confidence": "monthly opex (currently just a rough estimate)",
+    "expected_monthly_sales_low_confidence": "expected monthly sales (currently just a rough estimate)",
+}
+
+# Everything else patchable is a decision only the founder can make — chat
+# must ask, never silently fabricate an answer for these.
+_DECISION_GAP_FIELDS: list[tuple[str, str]] = [
+    ("problem_statement", "the problem this business solves"),
+    ("unique_value_proposition", "what makes this business different from alternatives"),
+    ("target_market_description", "who the target customer is"),
+    ("target_market_geography", "the target geography"),
+    ("target_market_type", "B2C or B2B"),
+    ("business_model_type", "the business model (SaaS, marketplace, etc.)"),
+    ("funding_source", "how the business is funded"),
+    ("founder_risks", "risks or concerns the founder has"),
+    ("team_size", "current or planned team size"),
+    ("key_roles_needed", "key roles/hires needed"),
+    ("marketing_channels", "sales/marketing channels"),
+    ("study_goal", "the purpose of this study"),
+    ("pricing_model", "the pricing model (subscription, one-time, etc.)"),
+]
+
+
+def _profile_gaps(profile) -> tuple[list[str], list[str]]:
+    """Returns (researchable, decision) — human-readable descriptions of
+    still-missing or low-confidence fields, for _system_prompt's gap
+    section. Recomputed fresh from the DB (not conversation memory) every
+    turn, so an already-answered field is never re-listed, in this session
+    or any future one."""
+    researchable = []
+    if not profile.competitors:
+        researchable.append(_RESEARCHABLE_GAP_LABELS["competitors"])
+    for flag_field, label in _RESEARCHABLE_GAP_LABELS.items():
+        if flag_field != "competitors" and getattr(profile, flag_field):
+            researchable.append(label)
+
+    decision = [
+        description
+        for field, description in _DECISION_GAP_FIELDS
+        if getattr(profile, field) in (None, "", [])
+    ]
+    return researchable, decision
+
+
 def _system_prompt(project: Project, memory_entries: list[MemoryEntry]) -> str:
     profile = project.business_profile
+    researchable_gaps, decision_gaps = _profile_gaps(profile)
+    gap_section = ""
+    if researchable_gaps or decision_gaps:
+        gap_section = "\n\nStill missing from this profile:\n"
+        if decision_gaps:
+            gap_section += (
+                "- Ask the user about (only the founder can answer these): "
+                + "; ".join(decision_gaps) + "\n"
+            )
+        if researchable_gaps:
+            gap_section += (
+                "- You may research these yourself if the user doesn't know: "
+                + "; ".join(researchable_gaps) + "\n"
+            )
     memory_section = (
         "\n\nWhat you remember about this user across all projects:\n"
         + "\n".join(f"- {m.content}" for m in memory_entries)
@@ -64,7 +164,20 @@ def _system_prompt(project: Project, memory_entries: list[MemoryEntry]) -> str:
         f"- Pricing: {profile.pricing_unit_price} {profile.pricing_currency} "
         f"({profile.pricing_model or 'model unspecified'})\n"
         f"- Competitors: {', '.join(c['name'] for c in profile.competitors) or 'none listed'}\n"
-        f"- Study goal: {profile.study_goal or 'unknown'}\n\n"
+        f"- Study goal: {profile.study_goal or 'unknown'}\n"
+        + gap_section + "\n"
+        "This business profile persists across every chat session for this "
+        "project — anything already filled in above is already known; never "
+        "ask about it again in this or any future session. When it's "
+        "natural in the conversation, weave in at most one or two questions "
+        "at a time about the 'still missing' items above — not an "
+        "interrogation. If the user says they don't know something listed "
+        "under 'you may research', use web_research_tool then call "
+        "update_business_profile with source=\"estimated\" to save what you "
+        "find — don't leave it blank. If they don't know something you must "
+        "ask them, offer a clarifying question or suggestion instead of "
+        "researching it yourself, and move on rather than blocking the "
+        "conversation if it stays unknown.\n\n"
         "The feasibility study is a collection of INDEPENDENT capabilities, each "
         "with its own dedicated tool — it is NOT one bulk operation you run by "
         "default. Map exactly what the user names to exactly one tool:\n"
@@ -105,6 +218,16 @@ def _system_prompt(project: Project, memory_entries: list[MemoryEntry]) -> str:
         "role, industry background, or a stated preference for how you should "
         "respond. Do not use it for facts that only matter to this project's "
         "business profile; use update_business_profile for those instead. "
+        "Use web_research_tool for an open-ended market/industry question "
+        "that isn't already answered by the data above — cite the source "
+        "URL for every claim you build from it. Use explain_figure_tool "
+        "when the user asks how a specific number/figure was derived or "
+        "why it is what it is (e.g. 'why is break-even at month 8') — never "
+        "re-derive it yourself. Use run_scenario_simulation_tool for a "
+        "'what if' question about a financial input (price, capex, opex, "
+        "expected sales) — it never runs a new study or changes saved data, "
+        "it only shows a hypothetical comparison; follow it with "
+        "generate_chart_tool to visualize baseline vs. scenario. "
         "Whenever your answer includes meaningful numerical or quantitative "
         "data suited to visual comparison — figures across categories or "
         "competitors, a trend over time, a proportional breakdown — call "
@@ -158,6 +281,32 @@ def _study_context_block(study: StudyResult) -> str:
         f"project (verdict: {study.verdict}, confidence: {study.confidence_score}):\n\n"
         + "\n\n".join(parts)
     )
+
+
+def _find_figure_data(data: object, needle: str) -> object | None:
+    """Walks a section's raw (untrimmed) data looking for a figure matching
+    needle — a dict key that contains it, or a list item whose name/
+    category/title-like field matches — used by explain_figure_tool, which
+    (unlike the system-prompt digest) needs the untrimmed calculation_trace/
+    citations/methodology this deliberately doesn't strip."""
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if needle in key.lower().replace("_", " "):
+                return {key: value}
+        for label_key in ("name", "category", "title", "risk_description"):
+            label = data.get(label_key)
+            if isinstance(label, str) and needle in label.lower():
+                return data
+        for value in data.values():
+            found = _find_figure_data(value, needle)
+            if found is not None:
+                return found
+    elif isinstance(data, list):
+        for item in data:
+            found = _find_figure_data(item, needle)
+            if found is not None:
+                return found
+    return None
 
 
 _PHASE_TO_SECTION = {
@@ -226,6 +375,123 @@ def _build_tools(
             await queue.put(SSEEvent.CHAT_TOOL_ERROR, {"tool_name": tool_name, "error": str(exc)})
             content, study_id, chart_data = f"Error running {tool_name}: {exc}", None, None
         return await _finish_tool_call(tool_name, content, study_id, chart_data)
+
+    @tool
+    async def web_research_tool(query: str) -> str:
+        """Search the web for a specific, current market/industry
+        fact-finding question that isn't already answered by the business
+        profile or study data already provided above (e.g. "current pricing
+        trends in <industry>", "typical customer acquisition cost for
+        <business type>", "recent regulatory changes affecting <market>").
+        Also useful before bootstrap_profile_tool, to look up typical
+        pricing/costs for this kind of business instead of asking the user
+        cold. Do NOT use this to explain a number that already appears in
+        the data above — answer that directly instead. You MUST cite the
+        source URL for every factual claim you build from these results."""
+
+        async def _inner() -> tuple[str, str | None, dict | None]:
+            results = await web_search.search(
+                query, get_settings().tavily_api_key, max_results=6
+            )
+            if not results:
+                return f"No web results found for: {query}", None, None
+            formatted = "\n\n".join(
+                f"[{i}] {r.title}\n{r.url}\n{r.snippet}" for i, r in enumerate(results, start=1)
+            )
+            return formatted, None, None
+
+        return await _run_tool_safely("web_research_tool", _inner)
+
+    @tool
+    async def bootstrap_profile_tool(
+        business_description: str,
+        raw_user_input: str | None = None,
+        problem_statement: str | None = None,
+        unique_value_proposition: str | None = None,
+        target_market_description: str | None = None,
+        target_market_geography: str | None = None,
+        target_market_type: str | None = None,
+        business_model_type: str | None = None,
+        pricing_unit_price: float | None = None,
+        pricing_currency: str = "USD",
+        pricing_model: str | None = None,
+        expected_monthly_sales: float | None = None,
+        capex_amount: float | None = None,
+        opex_monthly_amount: float | None = None,
+        funding_source: str | None = None,
+        team_size: int | None = None,
+        key_roles_needed: list[str] | None = None,
+        marketing_channels: list[str] | None = None,
+        competitors: list[str] | None = None,
+        founder_risks: str | None = None,
+        study_goal: str | None = None,
+        analysis_horizon_years: int = 3,
+    ) -> str:
+        """Build this project's business profile for the FIRST time, from
+        everything the user has told you so far. Call this once you have at
+        least a clear business_description — pass every other field you've
+        already learned too, not just that one; anything omitted is
+        extracted from business_description/raw_user_input automatically or
+        estimated via research where possible. REQUIRES a
+        pricing_unit_price (price per unit/subscription/transaction) — if
+        you don't have one yet, ask the user for it before calling this.
+        Calling this again later (e.g. once you've learned the price, or
+        anything else new) re-runs extraction with everything you now
+        know."""
+
+        async def _inner() -> tuple[str, str | None, dict | None]:
+            try:
+                request = FeasibilityStartRequest(
+                    business_description=business_description,
+                    raw_user_input=raw_user_input,
+                    analysis_horizon_years=analysis_horizon_years,
+                    problem_statement=problem_statement,
+                    unique_value_proposition=unique_value_proposition,
+                    target_market_description=target_market_description,
+                    target_market_geography=target_market_geography,
+                    target_market_type=target_market_type,
+                    business_model_type=business_model_type,
+                    pricing_unit_price=pricing_unit_price,
+                    pricing_currency=pricing_currency,
+                    pricing_model=pricing_model,
+                    expected_monthly_sales=expected_monthly_sales,
+                    capex_amount=capex_amount,
+                    opex_monthly_amount=opex_monthly_amount,
+                    funding_source=funding_source,
+                    team_size=team_size,
+                    key_roles_needed=key_roles_needed,
+                    marketing_channels=marketing_channels,
+                    competitors=competitors,
+                    founder_risks=founder_risks,
+                    study_goal=study_goal,
+                )
+            except ValidationError as exc:
+                return f"Couldn't build the profile yet: {exc}", None, None
+
+            try:
+                await populate_business_profile(db, project, request)
+            except IntakeHardBlockError:
+                return (
+                    "I still need to know the planned price per unit, "
+                    "subscription fee, or transaction value before I can "
+                    "build the profile — ask the user for it, then call "
+                    "this tool again."
+                ), None, None
+            return (
+                f'Business profile created for "{project.name}". The full '
+                "toolset (running studies, updating the profile, etc.) is "
+                "now available."
+            ), None, None
+
+        return await _run_tool_safely("bootstrap_profile_tool", _inner)
+
+    if project.business_profile is None:
+        # Nothing else is safe to expose yet: every other tool below reads
+        # project.business_profile directly (via _system_prompt, or via
+        # study.feasibility_input_from_business_profile) and would crash on
+        # None — rather than scattering null-checks through all of them,
+        # the profile's existence gates the whole tool list instead.
+        return [bootstrap_profile_tool, web_research_tool]
 
     @tool
     async def run_feasibility_study_tool() -> str:
@@ -365,10 +631,17 @@ def _build_tools(
         key_roles_needed: list[str] | None = None,
         marketing_channels: list[str] | None = None,
         study_goal: str | None = None,
+        additional_context: str | None = None,
+        source: Literal["user_provided", "estimated"] = "user_provided",
     ) -> str:
         """Update the project's business profile with new or corrected
-        information the user reveals during the conversation. Only pass the
-        fields that should change; omit everything else."""
+        information. Only pass the fields that should change; omit
+        everything else. Use additional_context for a useful fact that
+        doesn't fit any other field — it's appended to previous notes, never
+        overwritten. Set source="estimated" when YOU looked up or inferred a
+        value yourself (e.g. via web_research_tool) rather than the user
+        stating it directly — leave it as the default "user_provided" for
+        anything the user told you themselves."""
 
         async def _inner() -> tuple[str, str | None, dict | None]:
             # The tool call always binds every parameter (unprovided ones default
@@ -399,12 +672,13 @@ def _build_tools(
                 "key_roles_needed": key_roles_needed,
                 "marketing_channels": marketing_channels,
                 "study_goal": study_goal,
+                "additional_context": additional_context,
             }
             non_null = {k: v for k, v in provided.items() if v is not None}
             if not non_null:
                 return "No fields provided — nothing updated.", None, None
             patch = BusinessProfileUpdate(**non_null)
-            update_business_profile(db, project.business_profile, patch)
+            update_business_profile(db, project.business_profile, patch, source=Source(source))
             return "Business profile updated.", None, None
 
         return await _run_tool_safely("update_business_profile_tool", _inner)
@@ -465,6 +739,137 @@ def _build_tools(
 
         return await _run_tool_safely("generate_chart_tool", _inner)
 
+    @tool
+    async def explain_figure_tool(
+        figure_description: str,
+        section_hint: Literal[
+            "market_overview", "competitive_landscape",
+            "financial_feasibility", "risk_assessment", "executive_summary",
+        ] | None = None,
+    ) -> str:
+        """Explain the derivation, assumptions, methodology, and sources of
+        ONE specific number/entity already computed in this project's most
+        recent completed study (e.g. "TAM", "break-even months", "NPV", "the
+        regulatory risk"). Use this INSTEAD OF web_research_tool or
+        re-running any phase — never recompute or re-derive anything
+        yourself. `figure_description` is your best-effort name for the
+        figure as it appeared in the data already provided above.
+        `section_hint` narrows the search if you know which section it's
+        in."""
+
+        async def _inner() -> tuple[str, str | None, dict | None]:
+            study = next(
+                (s for s in project.study_results if s.status == "completed"), None
+            )
+            if study is None:
+                return "No completed study exists yet for this project.", None, None
+
+            sections = study.sections or {}
+            section_names = [section_hint] if section_hint else [
+                n for n in sections if n != "glossary"
+            ]
+            needle = figure_description.strip().lower()
+
+            for name in section_names:
+                envelope = sections.get(name)
+                data = envelope.get("data") if isinstance(envelope, dict) else None
+                if not data:
+                    continue
+                match = _find_figure_data(data, needle)
+                if match is not None:
+                    return (
+                        f'From the "{name}" section of "{study.title or study.id}" '
+                        f"(completed {study.completed_at}):\n"
+                        f"{json.dumps(match, ensure_ascii=False, default=str)}"
+                    ), None, None
+
+            available = sorted(
+                {
+                    key
+                    for name in section_names
+                    for key in ((sections.get(name) or {}).get("data") or {}).keys()
+                }
+            )
+            return (
+                f'Couldn\'t find "{figure_description}" in the study data. '
+                f"Available figures: {', '.join(available) or 'none'}."
+            ), None, None
+
+        return await _run_tool_safely("explain_figure_tool", _inner)
+
+    @tool
+    async def run_scenario_simulation_tool(
+        unit_price: float | None = None,
+        capex: float | None = None,
+        opex_monthly: float | None = None,
+        expected_monthly_sales: float | None = None,
+        analysis_horizon_years: int | None = None,
+    ) -> str:
+        """Recompute break-even/ROI/NPV/sensitivity/cash-flow for a
+        hypothetical change to one or more financial inputs, compared
+        against the current business profile's baseline — WITHOUT running a
+        new study or persisting anything. Pass ONLY the input(s) that
+        change, as their new ABSOLUTE value (compute it yourself from the
+        baseline shown above, e.g. baseline price × 1.2 for "raise price
+        20%"); every omitted input is held at the profile's current value.
+        Follow this up with generate_chart_tool (a "Baseline" vs "Scenario"
+        series) to visualize the comparison."""
+
+        async def _inner() -> tuple[str, str | None, dict | None]:
+            profile = project.business_profile
+            if profile.expected_monthly_sales is None:
+                return (
+                    "Missing expected monthly sales in the business profile — "
+                    "ask the user for it, or run financial analysis first, "
+                    "before simulating a scenario."
+                ), None, None
+
+            base_kwargs = dict(
+                capex=profile.capex_amount,
+                opex_monthly=profile.opex_monthly_amount,
+                unit_price=profile.pricing_unit_price,
+                expected_monthly_sales=profile.expected_monthly_sales,
+                analysis_horizon_years=profile.analysis_horizon_years,
+            )
+            scenario_kwargs = {
+                **base_kwargs,
+                **{
+                    k: v
+                    for k, v in dict(
+                        capex=capex,
+                        opex_monthly=opex_monthly,
+                        unit_price=unit_price,
+                        expected_monthly_sales=expected_monthly_sales,
+                        analysis_horizon_years=analysis_horizon_years,
+                    ).items()
+                    if v is not None
+                },
+            }
+
+            try:
+                baseline = run_full_financial_model(**base_kwargs)
+                scenario = run_full_financial_model(**scenario_kwargs)
+            except FinancialCalcError as exc:
+                return f"Couldn't simulate that scenario: {exc}", None, None
+
+            def _summarize(result: dict) -> dict:
+                return {
+                    "break_even_months": result["break_even"]["break_even_months"],
+                    "roi_year_1_percent": result["roi_year_1"]["roi_percent"],
+                    "npv": result["npv"]["npv"],
+                    "payback_month": result["cash_flow"]["payback_month"],
+                }
+
+            summary = {
+                "baseline_inputs": base_kwargs,
+                "scenario_inputs": scenario_kwargs,
+                "baseline": _summarize(baseline),
+                "scenario": _summarize(scenario),
+            }
+            return json.dumps(summary, ensure_ascii=False), None, None
+
+        return await _run_tool_safely("run_scenario_simulation_tool", _inner)
+
     return [
         run_feasibility_study_tool,
         run_market_sizing_tool,
@@ -475,6 +880,9 @@ def _build_tools(
         update_business_profile_tool,
         remember_fact_tool,
         generate_chart_tool,
+        web_research_tool,
+        explain_figure_tool,
+        run_scenario_simulation_tool,
     ]
 
 
@@ -735,12 +1143,15 @@ async def run_chat_turn(
     )
 
     memory_entries = list_memory_entries(db)
-    system_prompt = _system_prompt(project, memory_entries)
-    latest_study_id = get_latest_study_id_for_session(db, session)
-    if latest_study_id:
-        latest_study = db.query(StudyResult).filter_by(id=latest_study_id).one_or_none()
-        if latest_study is not None:
-            system_prompt += _study_context_block(latest_study)
+    if project.business_profile is None:
+        system_prompt = _bootstrap_system_prompt(memory_entries)
+    else:
+        system_prompt = _system_prompt(project, memory_entries)
+        latest_study_id = get_latest_study_id_for_session(db, session)
+        if latest_study_id:
+            latest_study = db.query(StudyResult).filter_by(id=latest_study_id).one_or_none()
+            if latest_study is not None:
+                system_prompt += _study_context_block(latest_study)
 
     history: list = [SystemMessage(content=system_prompt)]
     history.extend(_load_history_messages(session))

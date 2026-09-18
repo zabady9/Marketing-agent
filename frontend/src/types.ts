@@ -29,34 +29,6 @@ export type AgentName =
   | 'synthesis'
   | 'citation_qc'
 
-// ── API request ────────────────────────────────────────────────────────────────
-
-export interface StartStudyRequest {
-  business_description: string
-  raw_user_input?: string
-  output_language?: string
-  analysis_horizon_years?: number
-  problem_statement?: string
-  unique_value_proposition?: string
-  target_market_description?: string
-  target_market_geography?: string
-  target_market_type?: string
-  business_model_type?: string
-  pricing_unit_price?: number
-  pricing_currency?: string
-  pricing_model?: string
-  expected_monthly_sales?: number
-  capex_amount?: number
-  opex_monthly_amount?: number
-  funding_source?: string
-  team_size?: number
-  key_roles_needed?: string[]
-  marketing_channels?: string[]
-  competitors?: string[]
-  founder_risks?: string
-  study_goal?: string
-}
-
 // ── Projects ───────────────────────────────────────────────────────────────────
 
 export interface ProjectSummary {
@@ -190,6 +162,7 @@ export interface BusinessProfile {
   marketing_channels: SourcedValue<string[]>
   study_goal: SourcedValue<string>
   analysis_horizon_years: number
+  additional_context: string | null
   created_at: string
   updated_at: string
 }

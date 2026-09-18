@@ -1,11 +1,11 @@
 import type { ReactNode } from 'react'
 import { useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
-import { getBusinessProfile, listStudies } from '../api'
+import { Link, Navigate, useParams } from 'react-router-dom'
+import { getBusinessProfile, listStudies, ProfileNotFoundError } from '../api'
 import { formatDate, getStudyTitle } from '../lib/format'
 import type { BusinessProfile, StudyResultResponse } from '../types'
 
-type LoadState = 'loading' | 'loaded' | 'error'
+type LoadState = 'loading' | 'loaded' | 'error' | 'not-found'
 type StudyLoadState = 'loading' | 'loaded' | 'error'
 
 const STUDY_STATUS_LABELS: Record<string, string> = {
@@ -163,6 +163,10 @@ export function BusinessProfilePage() {
       })
       .catch((err) => {
         if (cancelled) return
+        if (err instanceof ProfileNotFoundError) {
+          setState('not-found')
+          return
+        }
         setError(err instanceof Error ? err.message : 'Failed to load business profile.')
         setState('error')
       })
@@ -177,6 +181,12 @@ export function BusinessProfilePage() {
         <p className="text-gray-500 text-sm">Loading business profile…</p>
       </div>
     )
+  }
+
+  // Chat hasn't built the profile yet — this is a normal state for a brand
+  // new project, not an error, so route straight into the conversation.
+  if (state === 'not-found' && projectId) {
+    return <Navigate to={`/projects/${projectId}/chat`} replace />
   }
 
   if (state === 'error' || !profile) {
@@ -212,7 +222,7 @@ export function BusinessProfilePage() {
         <h1 className="text-3xl font-semibold text-gray-900 tracking-tight mb-1">
           Business Profile
         </h1>
-        <p className="text-sm text-gray-400 mb-8">Extracted from your questionnaire answers.</p>
+        <p className="text-sm text-gray-400 mb-8">Built from your conversation in chat.</p>
 
         <div className="rounded-xl border border-gray-200 bg-white p-6 space-y-6">
           <Field
@@ -368,6 +378,15 @@ export function BusinessProfilePage() {
             value={profile.founder_risks.value || 'None stated'}
             source={profile.founder_risks.source}
           />
+
+          {profile.additional_context && (
+            <div>
+              <p className="text-xs font-medium text-gray-500 mb-1">Additional notes</p>
+              <p className="text-sm text-gray-900 whitespace-pre-line">
+                {profile.additional_context}
+              </p>
+            </div>
+          )}
         </div>
       </div>
     </div>

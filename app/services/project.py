@@ -110,20 +110,34 @@ def _business_profile_from_feasibility_input(input_: FeasibilityInput) -> Busine
     )
 
 
-async def create_project_from_questionnaire(
-    db: Session, request: FeasibilityStartRequest
+def create_bare_project(db: Session) -> Project:
+    """The only way a project is created — with no BusinessProfile yet. Chat
+    gathers the business idea conversationally afterward and calls
+    populate_business_profile once it knows enough (see
+    chat_agent.bootstrap_profile_tool). There is no wizard/form-based
+    creation path."""
+    project = Project(name="Untitled Project")
+    db.add(project)
+    db.commit()
+    db.refresh(project)
+    return project
+
+
+async def populate_business_profile(
+    db: Session, project: Project, request: FeasibilityStartRequest
 ) -> Project:
-    """Runs intake extraction; on success, persists Project + BusinessProfile in
-    one transaction. Raises IntakeHardBlockError (e.g. missing price) before
-    anything is written — no draft/orphan project rows on hard failure."""
-    queue = EventQueue()  # progress events go here; unused for this sync creation path
+    """Runs intake extraction and attaches a BusinessProfile to an existing
+    (previously bare) project. Raises IntakeHardBlockError (e.g. missing
+    price) before anything is written — the project itself is left
+    untouched on hard failure, so the caller can just try again once it has
+    more info."""
+    queue = EventQueue()  # progress events go here; unused for this sync path
     study_id = str(uuid.uuid4())
     feasibility_input = await IntakeFeasibilityAgent().run(study_id, request, queue)
 
-    project = Project(name=_derive_project_name(feasibility_input.business_description.value))
+    project.name = _derive_project_name(feasibility_input.business_description.value)
     project.business_profile = _business_profile_from_feasibility_input(feasibility_input)
 
-    db.add(project)
     db.commit()
     db.refresh(project)
     return project
@@ -326,26 +340,45 @@ def business_profile_to_response(profile: BusinessProfile) -> BusinessProfileRes
             value=profile.study_goal, source=profile.study_goal_source
         ),
         analysis_horizon_years=profile.analysis_horizon_years,
+        additional_context=profile.additional_context,
         created_at=profile.created_at,
         updated_at=profile.updated_at,
     )
 
 
 def update_business_profile(
-    db: Session, profile: BusinessProfile, patch: BusinessProfileUpdate
+    db: Session,
+    profile: BusinessProfile,
+    patch: BusinessProfileUpdate,
+    source: Source = Source.USER_PROVIDED,
 ) -> BusinessProfile:
+    """`source` controls what every *_source column gets stamped with —
+    defaults to user_provided (the user told chat this directly). Pass
+    Source.ESTIMATED when chat is persisting a value it looked up itself
+    (e.g. via web_research_tool) rather than something the user stated, so
+    BusinessProfilePage's provenance badges stay accurate.
+
+    additional_context is the one field with append (not overwrite)
+    semantics — it has no *_source/*_low_confidence column of its own, since
+    it's a freeform accumulating notes field, not a single sourced fact."""
     data = patch.model_dump(exclude_unset=True)
 
     if "competitors" in data:
         data["competitors"] = [
-            {"name": name, "source": Source.USER_PROVIDED.value} for name in data["competitors"]
+            {"name": name, "source": source.value} for name in data["competitors"]
         ]
+
+    if "additional_context" in data:
+        new_note = data.pop("additional_context")
+        profile.additional_context = (
+            f"{profile.additional_context}\n{new_note}" if profile.additional_context else new_note
+        )
 
     for field, value in data.items():
         setattr(profile, field, value)
         source_column = _SOURCE_COLUMN_FOR.get(field)
         if source_column:
-            setattr(profile, source_column, Source.USER_PROVIDED.value)
+            setattr(profile, source_column, source.value)
         low_confidence_column = _LOW_CONFIDENCE_COLUMN_FOR.get(field)
         if low_confidence_column:
             setattr(profile, low_confidence_column, False)

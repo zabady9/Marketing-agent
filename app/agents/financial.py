@@ -40,6 +40,91 @@ class FinancialCalcError(Exception):
     """Raised when a required financial input is unavailable or a calc fails."""
 
 
+def run_full_financial_model(
+    *,
+    capex: float,
+    opex_monthly: float,
+    unit_price: float,
+    expected_monthly_sales: float,
+    analysis_horizon_years: int,
+) -> dict[str, dict[str, Any]]:
+    """The same six-calculation sequence FinancialModelingAgent.run() uses,
+    as one pure function with no SSE/CalcTrace/LLM involvement — shared by
+    the real pipeline (below) and chat's what-if scenario tool (see
+    chat_agent.run_scenario_simulation_tool) so the two can never silently
+    drift apart. Raises FinancialCalcError on any calculator failure."""
+    horizon_months = analysis_horizon_years * 12
+    monthly_revenue = unit_price * expected_monthly_sales
+    annual_net = (monthly_revenue - opex_monthly) * 12
+
+    try:
+        break_even = calculate_break_even(BreakEvenInput(
+            fixed_costs=capex, unit_price=unit_price,
+            variable_cost_per_unit=0.0, monthly_unit_sales=expected_monthly_sales,
+        ))
+    except Exception as exc:
+        raise FinancialCalcError(f"calculate_break_even failed: {exc}") from exc
+
+    try:
+        roi_year_1 = calculate_roi(ROIInput(
+            total_investment=capex, net_profit=annual_net - capex,
+        ))
+    except Exception as exc:
+        raise FinancialCalcError(f"calculate_roi (year 1) failed: {exc}") from exc
+
+    try:
+        roi_year_n = calculate_roi(ROIInput(
+            total_investment=capex,
+            net_profit=annual_net * analysis_horizon_years - capex,
+        ))
+    except Exception as exc:
+        raise FinancialCalcError(
+            f"calculate_roi (year {analysis_horizon_years}) failed: {exc}"
+        ) from exc
+
+    try:
+        npv = calculate_npv(NPVInput(
+            initial_investment=capex,
+            annual_cash_flows=[annual_net] * analysis_horizon_years,
+            discount_rate=0.10,
+        ))
+    except Exception as exc:
+        raise FinancialCalcError(f"calculate_npv failed: {exc}") from exc
+
+    try:
+        sensitivity = run_sensitivity_analysis(SensitivityInput(
+            fixed_costs=capex, unit_price=unit_price, variable_cost_per_unit=0.0,
+            monthly_unit_sales=expected_monthly_sales, revenue_multipliers=[0.7, 1.0, 1.3],
+        ))
+    except Exception as exc:
+        raise FinancialCalcError(f"run_sensitivity_analysis failed: {exc}") from exc
+
+    try:
+        cash_flow = project_cash_flow(CashFlowInput(
+            monthly_revenue=monthly_revenue, monthly_opex=opex_monthly,
+            capex=capex, horizon_months=horizon_months,
+        ))
+    except Exception as exc:
+        raise FinancialCalcError(f"project_cash_flow failed: {exc}") from exc
+
+    try:
+        cost_structure = calculate_cost_structure(CostStructureInput(
+            capex=capex, opex_monthly=opex_monthly, horizon_months=horizon_months,
+        ))
+    except Exception as exc:
+        raise FinancialCalcError(f"calculate_cost_structure failed: {exc}") from exc
+
+    return {
+        "break_even": break_even,
+        "roi_year_1": roi_year_1,
+        "roi_year_n": roi_year_n,
+        "npv": npv,
+        "sensitivity": sensitivity,
+        "cash_flow": cash_flow,
+        "cost_structure": cost_structure,
+    }
+
+
 def _confidence(fi: FeasibilityInput, *fields: str) -> Literal["high", "low"]:
     """Return 'low' if any of the named FeasibilityInput fields has low_confidence."""
     for name in fields:
@@ -113,96 +198,71 @@ class FinancialModelingAgent:
         monthly_revenue = unit_price * monthly_sales
         annual_net = (monthly_revenue - opex_monthly) * 12
 
-        # ── 2. Run all five calculations, emitting SSE for each ───────────────
-
-        # 2a. Break-even
-        be_inputs = dict(
-            fixed_costs=capex,
+        # ── 2. Run all calculations via the shared formula path, emitting
+        # SSE + building a CalcTrace for each (see run_full_financial_model's
+        # docstring for why the calculations themselves live there, not here).
+        results = run_full_financial_model(
+            capex=capex,
+            opex_monthly=opex_monthly,
             unit_price=unit_price,
-            variable_cost_per_unit=0.0,
-            monthly_unit_sales=monthly_sales,
+            expected_monthly_sales=monthly_sales,
+            analysis_horizon_years=fi.analysis_horizon_years,
         )
-        try:
-            be_output = calculate_break_even(BreakEvenInput(**be_inputs))
-        except Exception as exc:
-            raise FinancialCalcError(f"calculate_break_even failed: {exc}") from exc
+
+        be_output = results["break_even"]
+        be_inputs = dict(
+            fixed_costs=capex, unit_price=unit_price,
+            variable_cost_per_unit=0.0, monthly_unit_sales=monthly_sales,
+        )
         be_conf = _confidence(fi, "capex", "expected_monthly_sales")
         be_trace = await _emit_calc(queue, fi.study_id, "calculate_break_even",
                                     be_inputs, be_output, be_conf)
 
-        # 2b. ROI year 1
-        yr1_net = annual_net - capex
-        roi1_inputs = dict(total_investment=capex, net_profit=yr1_net)
-        try:
-            roi1_output = calculate_roi(ROIInput(**roi1_inputs))
-        except Exception as exc:
-            raise FinancialCalcError(f"calculate_roi (year 1) failed: {exc}") from exc
+        roi1_output = results["roi_year_1"]
+        roi1_inputs = dict(total_investment=capex, net_profit=annual_net - capex)
         roi1_conf = _confidence(fi, "capex", "opex_monthly", "expected_monthly_sales")
         roi1_trace = await _emit_calc(queue, fi.study_id, "calculate_roi",
                                       roi1_inputs, roi1_output, roi1_conf)
 
-        # 2c. ROI year N
-        roin_net = annual_net * fi.analysis_horizon_years - capex
-        roin_inputs = dict(total_investment=capex, net_profit=roin_net)
-        try:
-            roin_output = calculate_roi(ROIInput(**roin_inputs))
-        except Exception as exc:
-            raise FinancialCalcError(f"calculate_roi (year {fi.analysis_horizon_years}) failed: {exc}") from exc
+        roin_output = results["roi_year_n"]
+        roin_inputs = dict(
+            total_investment=capex,
+            net_profit=annual_net * fi.analysis_horizon_years - capex,
+        )
         roin_conf = roi1_conf
         roin_trace = await _emit_calc(queue, fi.study_id, "calculate_roi",
                                       roin_inputs, roin_output, roin_conf)
 
-        # 2d. NPV
+        npv_output = results["npv"]
         npv_inputs = dict(
             initial_investment=capex,
             annual_cash_flows=[annual_net] * fi.analysis_horizon_years,
             discount_rate=0.10,
         )
-        try:
-            npv_output = calculate_npv(NPVInput(**npv_inputs))
-        except Exception as exc:
-            raise FinancialCalcError(f"calculate_npv failed: {exc}") from exc
         npv_conf = _confidence(fi, "capex", "opex_monthly", "expected_monthly_sales")
         npv_trace = await _emit_calc(queue, fi.study_id, "calculate_npv",
                                      npv_inputs, npv_output, npv_conf)
 
-        # 2e. Sensitivity
+        sens_output = results["sensitivity"]
         sens_inputs = dict(
-            fixed_costs=capex,
-            unit_price=unit_price,
-            variable_cost_per_unit=0.0,
-            monthly_unit_sales=monthly_sales,
-            revenue_multipliers=[0.7, 1.0, 1.3],
+            fixed_costs=capex, unit_price=unit_price, variable_cost_per_unit=0.0,
+            monthly_unit_sales=monthly_sales, revenue_multipliers=[0.7, 1.0, 1.3],
         )
-        try:
-            sens_output = run_sensitivity_analysis(SensitivityInput(**sens_inputs))
-        except Exception as exc:
-            raise FinancialCalcError(f"run_sensitivity_analysis failed: {exc}") from exc
         sens_conf = _confidence(fi, "capex", "expected_monthly_sales")
         sens_trace = await _emit_calc(queue, fi.study_id, "run_sensitivity_analysis",
                                       sens_inputs, sens_output, sens_conf)
 
-        # 2f. Cash flow projection
+        cf_output = results["cash_flow"]
         cf_inputs = dict(
-            monthly_revenue=monthly_revenue,
-            monthly_opex=opex_monthly,
-            capex=capex,
-            horizon_months=horizon_months,
+            monthly_revenue=monthly_revenue, monthly_opex=opex_monthly,
+            capex=capex, horizon_months=horizon_months,
         )
-        try:
-            cf_output = project_cash_flow(CashFlowInput(**cf_inputs))
-        except Exception as exc:
-            raise FinancialCalcError(f"project_cash_flow failed: {exc}") from exc
         cf_conf = _confidence(fi, "capex", "opex_monthly", "expected_monthly_sales")
         cf_trace = await _emit_calc(queue, fi.study_id, "project_cash_flow",
                                     cf_inputs, cf_output, cf_conf)
 
-        # 2g. Cost structure (Capex vs. cumulative Opex over the horizon)
+        cs_output = results["cost_structure"]
         cs_inputs = dict(capex=capex, opex_monthly=opex_monthly, horizon_months=horizon_months)
-        try:
-            cs_output = calculate_cost_structure(CostStructureInput(**cs_inputs))
-        except Exception as exc:
-            raise FinancialCalcError(f"calculate_cost_structure failed: {exc}") from exc
         cs_conf = _confidence(fi, "capex", "opex_monthly")
         cs_trace = await _emit_calc(queue, fi.study_id, "calculate_cost_structure",
                                     cs_inputs, cs_output, cs_conf)

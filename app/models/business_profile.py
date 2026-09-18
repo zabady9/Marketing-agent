@@ -94,6 +94,11 @@ class BusinessProfile(Base):
 
     analysis_horizon_years: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
 
+    # Freeform, accumulating notes for facts chat discovers that don't map to
+    # any structured field above — appended to (not overwritten) by
+    # update_business_profile, unlike every other column here.
+    additional_context: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )
