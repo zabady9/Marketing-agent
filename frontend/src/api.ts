@@ -77,6 +77,30 @@ export async function getStudyById(projectId: string, studyId: string): Promise<
   return (await res.json()) as StudyResultResponse
 }
 
+export async function exportStudyMarkdown(projectId: string, studyId: string): Promise<string> {
+  const res = await fetch(`${BASE}/api/projects/${projectId}/studies/${studyId}/export`)
+  if (!res.ok) {
+    throw new Error(await errorMessageFor(res))
+  }
+  return res.text()
+}
+
+export async function exportChatMarkdown(
+  projectId: string,
+  sessionId: string,
+  studyIds?: string[],
+): Promise<string> {
+  const res = await fetch(`${BASE}/api/projects/${projectId}/chat/sessions/${sessionId}/export`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ study_ids: studyIds ?? null }),
+  })
+  if (!res.ok) {
+    throw new Error(await errorMessageFor(res))
+  }
+  return res.text()
+}
+
 export async function createProject(): Promise<string> {
   const res = await fetch(`${BASE}/api/projects`, { method: 'POST' })
   if (!res.ok) {

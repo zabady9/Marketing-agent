@@ -4,12 +4,15 @@ import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
+from app.config import get_settings
 from app.db import SessionLocal, get_db
 from app.models import StudyResult
 from app.schemas.chat import ChatMessageCreate, ChatMessageResponse, ChatSessionResponse
+from app.schemas.export import ChatExportRequest
 from app.schemas.project import (
     BusinessProfileResponse,
     BusinessProfileUpdate,
@@ -27,6 +30,7 @@ from app.services.chat import (
     list_chat_sessions,
 )
 from app.services.chat_agent import run_chat_turn
+from app.services.export import build_study_markdown, synthesize_chat_export
 from app.services.project import (
     business_profile_to_response,
     create_bare_project,
@@ -116,6 +120,23 @@ def get_study_by_id_endpoint(
     return StudyResultResponse.model_validate(study)
 
 
+@router.get("/{project_id}/studies/{study_id}/export")
+def export_study_markdown_endpoint(
+    project_id: str, study_id: str, db: Session = Depends(get_db)
+) -> PlainTextResponse:
+    """Deterministic markdown export of one study — no LLM call, so this is
+    a plain GET (same read-only semantics as get_study_by_id_endpoint)."""
+    study = (
+        db.query(StudyResult)
+        .filter_by(id=study_id, project_id=project_id)
+        .filter(StudyResult.deleted_at.is_(None))
+        .one_or_none()
+    )
+    if study is None:
+        raise HTTPException(status_code=404, detail="Study not found")
+    return PlainTextResponse(build_study_markdown([study]), media_type="text/markdown")
+
+
 @router.get("/{project_id}/chat/sessions", response_model=list[ChatSessionResponse])
 def list_chat_sessions_endpoint(
     project_id: str, db: Session = Depends(get_db)
@@ -150,6 +171,39 @@ def list_chat_messages_endpoint(
     if session is None:
         raise HTTPException(status_code=404, detail="Chat session not found")
     return list_chat_messages(db, session)
+
+
+@router.post("/{project_id}/chat/sessions/{session_id}/export")
+async def export_chat_markdown_endpoint(
+    project_id: str,
+    session_id: str,
+    payload: ChatExportRequest,
+    db: Session = Depends(get_db),
+) -> PlainTextResponse:
+    """One-shot LLM synthesis of the conversation into markdown — POST (not
+    GET) since it takes a body and makes an LLM call, unlike the
+    deterministic per-study export above."""
+    project = get_project(db, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    session = get_chat_session(db, project, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+
+    studies = None
+    if payload.study_ids:
+        studies = (
+            db.query(StudyResult)
+            .filter(StudyResult.id.in_(payload.study_ids), StudyResult.project_id == project_id)
+            .filter(StudyResult.deleted_at.is_(None))
+            .all()
+        )
+
+    settings = get_settings()
+    markdown = await synthesize_chat_export(
+        session, studies, google_api_key=settings.google_api_key, reasoning_model=settings.reasoning_model
+    )
+    return PlainTextResponse(markdown, media_type="text/markdown")
 
 
 @router.post("/{project_id}/chat/sessions/{session_id}/messages")

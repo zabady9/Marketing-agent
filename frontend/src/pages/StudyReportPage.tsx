@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useReactToPrint } from 'react-to-print'
-import { getProject, getStudyById, StudyNotFoundError } from '../api'
+import { exportStudyMarkdown, getProject, getStudyById, StudyNotFoundError } from '../api'
 import type { ProjectSummary, StudyResultResponse } from '../types'
 import { formatDate, formatPercent, getStudyTitle } from '../lib/format'
 import { isRtlLanguage } from '../lib/rtl'
@@ -97,6 +97,23 @@ export function StudyReportPage() {
     contentRef: reportRef,
     documentTitle: `${project?.name ?? projectId ?? 'feasibility-study'} - Study Report`,
   })
+
+  const [exporting, setExporting] = useState(false)
+  const handleExportMarkdown = () => {
+    if (!projectId || !studyId || exporting) return
+    setExporting(true)
+    exportStudyMarkdown(projectId, studyId)
+      .then((markdown) => {
+        const blob = new Blob([markdown], { type: 'text/markdown' })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `${project?.name ?? 'study'}-report.md`
+        a.click()
+        URL.revokeObjectURL(url)
+      })
+      .finally(() => setExporting(false))
+  }
 
   // Every MethodologyDisclosure is a click-to-reveal <details> — a reader
   // can't click anything in a PDF. Force them all open right before
@@ -204,12 +221,21 @@ export function StudyReportPage() {
           ← Project
         </Link>
         <p className="text-sm font-medium text-gray-700">Study Report</p>
-        <button
-          onClick={() => reactToPrintFn()}
-          className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-700 transition-colors"
-        >
-          Export PDF
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleExportMarkdown}
+            disabled={exporting}
+            className="rounded-lg border border-gray-300 px-4 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-50"
+          >
+            {exporting ? 'Exporting…' : 'Export Markdown'}
+          </button>
+          <button
+            onClick={() => reactToPrintFn()}
+            className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-700 transition-colors"
+          >
+            Export PDF
+          </button>
+        </div>
       </div>
 
       <div ref={reportRef} dir={dir} className="px-4 py-8">
