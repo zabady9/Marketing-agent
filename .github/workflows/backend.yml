@@ -11,6 +11,7 @@ on:
       - "uv.lock"
       - "Dockerfile"
       - ".github/workflows/backend.yml"
+  workflow_dispatch: {}
 
 permissions:
   contents: read
