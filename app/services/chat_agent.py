@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+import uuid
 from datetime import datetime
 from typing import Literal
 
@@ -16,11 +17,26 @@ from sqlalchemy.orm import Session
 from app.agents.financial import FinancialCalcError, run_full_financial_model
 from app.agents.intake import IntakeHardBlockError
 from app.config import get_settings
-from app.models import ChatMessage, ChatSession, MemoryEntry, Project, StudyResult
+from app.models import Artifact, ChatMessage, ChatSession, MemoryEntry, Project, StudyResult
+from app.schemas.artifact import (
+    ArtifactSummary,
+    DocumentOutline,
+    DocumentSection,
+    PresentationOutline,
+    SlideContent,
+)
 from app.schemas.chart import ChartSeries, ChartSpec
 from app.schemas.intake import FeasibilityStartRequest, Source
 from app.schemas.project import BusinessProfileUpdate
+from app.services.artifact_generation import (
+    ArtifactGenerationError,
+    generate_docx,
+    generate_pdf,
+    generate_pptx,
+)
+from app.services.artifact_generation import revise_artifact as run_artifact_revision
 from app.services.chat import get_latest_study_id_for_session, maybe_set_title
+from app.services.export import build_study_markdown, synthesize_chat_export
 from app.services.memory import add_memory_entry, list_memory_entries
 from app.services.project import populate_business_profile, update_business_profile
 from app.services.study import run_feasibility_study, run_single_phase_study
@@ -129,9 +145,22 @@ def _profile_gaps(profile) -> tuple[list[str], list[str]]:
     return researchable, decision
 
 
+_ARTIFACT_CAPABILITY_SECTION = (
+    "Use generate_presentation_tool when the user asks for a presentation, "
+    "slide deck, or slides on a topic (e.g. \"make a 10-slide deck about "
+    "X\"). Use generate_word_document_tool when they ask to create/write a "
+    "Word document or report. Use generate_pdf_report_tool when they ask "
+    "for a PDF specifically. Use revise_artifact_tool when they ask to "
+    "change, shorten, expand, or otherwise edit a document/deck you already "
+    "generated — never regenerate one of the tools above from scratch for "
+    "an edit request. "
+)
+
+
 def _system_prompt(project: Project, memory_entries: list[MemoryEntry]) -> str:
     profile = project.business_profile
     researchable_gaps, decision_gaps = _profile_gaps(profile)
+    artifact_section = _ARTIFACT_CAPABILITY_SECTION if get_settings().mcp_artifacts_enabled else ""
     gap_section = ""
     if researchable_gaps or decision_gaps:
         gap_section = "\n\nStill missing from this profile:\n"
@@ -236,7 +265,7 @@ def _system_prompt(project: Project, memory_entries: list[MemoryEntry]) -> str:
         "prose. This applies whether the data came from a study section "
         "already generated or from your own analysis in this conversation. "
         "Skip it for a single standalone number with nothing to compare "
-        "against. Keep "
+        "against. " + artifact_section + "Keep "
         "replies concise and focused on helping the user reason about this "
         "business idea." + memory_section
     )
@@ -338,11 +367,16 @@ def _build_tools(
     tool itself makes them path-independent for free."""
 
     async def _finish_tool_call(
-        tool_name: str, content: str, study_id: str | None = None, chart_data: dict | None = None
+        tool_name: str,
+        content: str,
+        study_id: str | None = None,
+        chart_data: dict | None = None,
+        artifact: dict | None = None,
     ) -> str:
         tool_message_row = ChatMessage(
             role="tool", content=content, tool_name=tool_name, status="complete",
             study_id=study_id, chart_data=chart_data,
+            artifact_id=artifact["id"] if artifact else None,
         )
         session.messages.append(tool_message_row)
         # Heartbeat the assistant placeholder row too — a single tool call
@@ -358,11 +392,18 @@ def _build_tools(
                 SSEEvent.CHAT_CHART_READY,
                 {"message_id": tool_message_row.id, "tool_name": tool_name, "chart": chart_data},
             )
+        if artifact is not None:
+            # Live push, mirroring the chart branch above — a page reload
+            # instead picks the artifact card back up via ChatMessage.artifact_id.
+            await queue.put(
+                SSEEvent.CHAT_ARTIFACT_READY,
+                {"message_id": tool_message_row.id, "tool_name": tool_name, "artifact": artifact},
+            )
         return content
 
     async def _run_tool_safely(tool_name: str, body) -> str:
         try:
-            content, study_id, chart_data = await body()
+            result = await body()
         except Exception as exc:
             # A DB write failing inside `body()` (e.g. a flush error) leaves
             # the session in a pending-rollback state — clear it before any
@@ -371,10 +412,22 @@ def _build_tools(
             # does) or that write would itself raise PendingRollbackError,
             # masking the real error entirely.
             db.rollback()
-            logger.warning("Chat tool '%s' failed for project %s: %s", tool_name, project_id, exc)
+            # exc_info=True (not just str(exc)) matters here: an anyio
+            # TaskGroup/ExceptionGroup's str() collapses to a useless
+            # "unhandled errors in a TaskGroup (N sub-exception(s))" —
+            # exc_info is what actually surfaces the wrapped cause(s) in the
+            # logs.
+            logger.warning(
+                "Chat tool '%s' failed for project %s: %s", tool_name, project_id, exc, exc_info=True
+            )
             await queue.put(SSEEvent.CHAT_TOOL_ERROR, {"tool_name": tool_name, "error": str(exc)})
-            content, study_id, chart_data = f"Error running {tool_name}: {exc}", None, None
-        return await _finish_tool_call(tool_name, content, study_id, chart_data)
+            result = (f"Error running {tool_name}: {exc}", None, None, None)
+        # Every tool's _inner() returns (content, study_id, chart_data) or,
+        # for the artifact-generation tools, (content, study_id, chart_data,
+        # artifact) — padding to length 4 lets both shapes flow through the
+        # same call without touching every existing tool's return sites.
+        content, study_id, chart_data, artifact = (tuple(result) + (None, None, None, None))[:4]
+        return await _finish_tool_call(tool_name, content, study_id, chart_data, artifact)
 
     @tool
     async def web_research_tool(query: str) -> str:
@@ -740,6 +793,233 @@ def _build_tools(
         return await _run_tool_safely("generate_chart_tool", _inner)
 
     @tool
+    async def generate_presentation_tool(title: str, slides: list[dict]) -> str:
+        """Generate an actual PowerPoint presentation (.pptx) the user can
+        download — call this when the user explicitly asks for a
+        presentation, slide deck, or slides on a topic (e.g. "make a
+        10-slide deck about X", "create a presentation about our market
+        opportunity"). `slides` is a list of {"heading": str, "bullets":
+        list[str] (1-8 short bullet points), "notes": str (optional speaker
+        notes)} — one entry per slide, in order (max 30 slides). Write the
+        slide content yourself from the conversation and the business
+        profile/study data already available above — do not ask the user
+        to supply the outline themselves unless they want to. Do NOT use
+        this for a written report or document — use
+        generate_word_document_tool or generate_pdf_report_tool instead."""
+
+        async def _inner() -> tuple[str, str | None, dict | None, dict | None]:
+            try:
+                outline = PresentationOutline(
+                    title=title, slides=[SlideContent(**s) for s in slides]
+                )
+            except ValidationError as exc:
+                return f"Presentation generation failed: invalid slide data ({exc}).", None, None, None
+
+            settings = get_settings()
+            artifact_id = str(uuid.uuid4())
+            try:
+                file = await generate_pptx(
+                    outline,
+                    storage_dir=settings.artifact_storage_dir,
+                    shared_output_dir=settings.mcp_shared_output_dir,
+                    project_id=project_id,
+                    artifact_id=artifact_id,
+                    presenton_api_key=settings.presenton_api_key,
+                )
+            except ArtifactGenerationError as exc:
+                return f"Presentation generation failed: {exc}", None, None, None
+
+            artifact_row = Artifact(
+                id=artifact_id, project_id=project_id, format="pptx", title=outline.title,
+                filename=file.filename, storage_path=file.path, size_bytes=file.size_bytes,
+                spec_json=outline.model_dump(),
+            )
+            db.add(artifact_row)
+            db.flush()
+            summary = ArtifactSummary(
+                id=artifact_row.id, format="pptx", title=outline.title,
+                filename=file.filename, size_bytes=file.size_bytes,
+            )
+            return (
+                f'Presentation "{outline.title}" generated ({len(outline.slides)} slides).',
+                None, None, summary.model_dump(),
+            )
+
+        return await _run_tool_safely("generate_presentation_tool", _inner)
+
+    @tool
+    async def generate_word_document_tool(title: str, sections: list[dict]) -> str:
+        """Generate an actual Word document (.docx) the user can download —
+        call this when the user explicitly asks to create/write a Word
+        document or report (e.g. "create a Word doc about X", "write up a
+        report on our findings"). `sections` is a list of {"heading": str,
+        "body": str (one or more paragraphs)} — one entry per section, in
+        order (max 50 sections). Write the content yourself from the
+        conversation and the business profile/study data already available
+        above. Do NOT use this for a PDF or a slide deck — use
+        generate_pdf_report_tool or generate_presentation_tool instead."""
+
+        async def _inner() -> tuple[str, str | None, dict | None, dict | None]:
+            try:
+                outline = DocumentOutline(
+                    title=title, sections=[DocumentSection(**s) for s in sections]
+                )
+            except ValidationError as exc:
+                return f"Document generation failed: invalid section data ({exc}).", None, None, None
+
+            settings = get_settings()
+            artifact_id = str(uuid.uuid4())
+            try:
+                file = await generate_docx(
+                    outline,
+                    storage_dir=settings.artifact_storage_dir,
+                    shared_output_dir=settings.mcp_shared_output_dir,
+                    project_id=project_id,
+                    artifact_id=artifact_id,
+                )
+            except ArtifactGenerationError as exc:
+                return f"Document generation failed: {exc}", None, None, None
+
+            artifact_row = Artifact(
+                id=artifact_id, project_id=project_id, format="docx", title=outline.title,
+                filename=file.filename, storage_path=file.path, size_bytes=file.size_bytes,
+                spec_json=outline.model_dump(),
+            )
+            db.add(artifact_row)
+            db.flush()
+            summary = ArtifactSummary(
+                id=artifact_row.id, format="docx", title=outline.title,
+                filename=file.filename, size_bytes=file.size_bytes,
+            )
+            return f'Word document "{outline.title}" generated.', None, None, summary.model_dump()
+
+        return await _run_tool_safely("generate_word_document_tool", _inner)
+
+    @tool
+    async def generate_pdf_report_tool(title: str) -> str:
+        """Generate an actual PDF report — a flowing, paginated text
+        document, NOT a slide deck — the user can download. Call this when
+        the user explicitly asks for a PDF or "a PDF report" specifically.
+        Builds the report from the most recently completed feasibility
+        study if one exists, otherwise synthesizes one from this
+        conversation. `title` is the report's title (e.g. the business name
+        or study topic). Do NOT use this for a PowerPoint/slide deck — use
+        generate_presentation_tool for that."""
+
+        async def _inner() -> tuple[str, str | None, dict | None, dict | None]:
+            settings = get_settings()
+            study = next(
+                (s for s in project.study_results if s.status == "completed"), None
+            )
+            if study is not None:
+                markdown = build_study_markdown([study])
+            else:
+                markdown = await synthesize_chat_export(
+                    session, None,
+                    google_api_key=settings.google_api_key,
+                    reasoning_model=settings.reasoning_model,
+                )
+
+            artifact_id = str(uuid.uuid4())
+            try:
+                file = await generate_pdf(
+                    markdown, title,
+                    storage_dir=settings.artifact_storage_dir,
+                    shared_output_dir=settings.mcp_shared_output_dir,
+                    project_id=project_id,
+                    artifact_id=artifact_id,
+                )
+            except ArtifactGenerationError as exc:
+                return f"PDF generation failed: {exc}", None, None, None
+
+            # Stored as a DocumentOutline (one section wrapping the whole
+            # rendered markdown) rather than raw markdown, so
+            # revise_artifact_tool can apply the same generic outline-edit
+            # path it uses for Word documents — see app.services.artifact_generation.revise_artifact.
+            spec = DocumentOutline(
+                title=title, sections=[DocumentSection(heading="Report", body=markdown)]
+            )
+            artifact_row = Artifact(
+                id=artifact_id, project_id=project_id, format="pdf", title=title,
+                filename=file.filename, storage_path=file.path, size_bytes=file.size_bytes,
+                spec_json=spec.model_dump(),
+            )
+            db.add(artifact_row)
+            db.flush()
+            summary = ArtifactSummary(
+                id=artifact_row.id, format="pdf", title=title,
+                filename=file.filename, size_bytes=file.size_bytes,
+            )
+            return f'PDF report "{title}" generated.', None, None, summary.model_dump()
+
+        return await _run_tool_safely("generate_pdf_report_tool", _inner)
+
+    @tool
+    async def revise_artifact_tool(instructions: str, artifact_id: str | None = None) -> str:
+        """Regenerate a previously generated document/presentation with
+        changes, based on natural-language instructions — call this when
+        the user asks to change, shorten, expand, or otherwise edit a
+        document/deck you already generated (e.g. "make slide 3 shorter",
+        "add a slide about risks", "expand the financial section"). Omit
+        `artifact_id` to revise the most recently generated artifact in
+        this project; pass it only if the user is clearly referring to an
+        earlier one. This creates a NEW file — the previous version stays
+        downloadable."""
+
+        async def _inner() -> tuple[str, str | None, dict | None, dict | None]:
+            target_id = artifact_id
+            if target_id is None:
+                latest = (
+                    db.query(Artifact)
+                    .filter(Artifact.project_id == project_id, Artifact.deleted_at.is_(None))
+                    .order_by(Artifact.created_at.desc())
+                    .first()
+                )
+                if latest is None:
+                    return "No previously generated document/presentation to revise.", None, None, None
+                target_id = latest.id
+
+            original = (
+                db.query(Artifact)
+                .filter_by(id=target_id, project_id=project_id, deleted_at=None)
+                .one_or_none()
+            )
+            if original is None:
+                return f"Couldn't find a generated artifact with id {target_id}.", None, None, None
+
+            settings = get_settings()
+            new_artifact_id = str(uuid.uuid4())
+            try:
+                file, revised_spec = await run_artifact_revision(
+                    original, instructions,
+                    google_api_key=settings.google_api_key,
+                    reasoning_model=settings.reasoning_model,
+                    storage_dir=settings.artifact_storage_dir,
+                    shared_output_dir=settings.mcp_shared_output_dir,
+                    new_artifact_id=new_artifact_id,
+                    presenton_api_key=settings.presenton_api_key,
+                )
+            except ArtifactGenerationError as exc:
+                return f"Revision failed: {exc}", None, None, None
+
+            new_title = revised_spec.get("title", original.title)
+            artifact_row = Artifact(
+                id=new_artifact_id, project_id=project_id, format=original.format,
+                title=new_title, filename=file.filename, storage_path=file.path,
+                size_bytes=file.size_bytes, spec_json=revised_spec,
+                parent_artifact_id=original.id,
+            )
+            db.add(artifact_row)
+            db.flush()
+            summary = ArtifactSummary(
+                id=artifact_row.id, format=original.format, title=new_title,
+                filename=file.filename, size_bytes=file.size_bytes,
+            )
+            return f'"{new_title}" revised.', None, None, summary.model_dump()
+
+        return await _run_tool_safely("revise_artifact_tool", _inner)
+
+    @tool
     async def explain_figure_tool(
         figure_description: str,
         section_hint: Literal[
@@ -870,7 +1150,7 @@ def _build_tools(
 
         return await _run_tool_safely("run_scenario_simulation_tool", _inner)
 
-    return [
+    tools = [
         run_feasibility_study_tool,
         run_market_sizing_tool,
         run_competitive_analysis_tool,
@@ -884,6 +1164,17 @@ def _build_tools(
         explain_figure_tool,
         run_scenario_simulation_tool,
     ]
+    if get_settings().mcp_artifacts_enabled:
+        # Gated separately from the rest — these depend on the three
+        # sibling MCP Docker services (docker-compose.yml) being up, unlike
+        # every other tool above which only needs this process.
+        tools += [
+            generate_presentation_tool,
+            generate_word_document_tool,
+            generate_pdf_report_tool,
+            revise_artifact_tool,
+        ]
+    return tools
 
 
 def _load_history_messages(session: ChatSession) -> list:

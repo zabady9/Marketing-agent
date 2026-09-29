@@ -2,15 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
 from app.config import get_settings
 from app.db import SessionLocal, get_db
-from app.models import StudyResult
+from app.models import Artifact, StudyResult
 from app.schemas.chat import ChatMessageCreate, ChatMessageResponse, ChatSessionResponse
 from app.schemas.export import ChatExportRequest
 from app.schemas.project import (
@@ -171,6 +172,45 @@ def list_chat_messages_endpoint(
     if session is None:
         raise HTTPException(status_code=404, detail="Chat session not found")
     return list_chat_messages(db, session)
+
+
+_ARTIFACT_MIME_BY_FORMAT = {
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "pdf": "application/pdf",
+}
+
+_UNSAFE_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|]')
+
+
+def _safe_download_filename(title: str, fmt: str) -> str:
+    slug = _UNSAFE_FILENAME_CHARS.sub("_", title).strip() or "artifact"
+    return f"{slug}.{fmt}"
+
+
+@router.get("/{project_id}/chat/artifacts/{artifact_id}/download")
+def download_artifact_endpoint(
+    project_id: str, artifact_id: str, db: Session = Depends(get_db)
+) -> FileResponse:
+    """First binary-file endpoint in this codebase — every other file-serving
+    route here returns markdown text. Filters by both project_id and
+    artifact_id together (same IDOR-prevention pattern as
+    get_study_by_id_endpoint) and always derives the on-disk path/filename
+    from the Artifact row rather than any caller-supplied value."""
+    artifact = (
+        db.query(Artifact)
+        .filter_by(id=artifact_id, project_id=project_id)
+        .filter(Artifact.deleted_at.is_(None))
+        .one_or_none()
+    )
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    download_name = _safe_download_filename(artifact.title, artifact.format)
+    return FileResponse(
+        artifact.storage_path,
+        media_type=_ARTIFACT_MIME_BY_FORMAT[artifact.format],
+        filename=download_name,
+    )
 
 
 @router.post("/{project_id}/chat/sessions/{session_id}/export")

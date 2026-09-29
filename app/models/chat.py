@@ -66,6 +66,14 @@ class ChatMessage(Base):
     # as an actual chart instead of (or alongside) the tool's text summary.
     # Null for every other tool call and for user/assistant rows.
     chart_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Set only on a successful generate_presentation_tool/generate_word_document_tool/
+    # generate_pdf_report_tool/revise_artifact_tool call — links this tool
+    # row to the generated file's metadata (app.models.artifact.Artifact).
+    # ON DELETE SET NULL: an artifact deleted independently of its message
+    # clears the reference instead of leaving a dangling id.
+    artifact_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("artifacts.id", ondelete="SET NULL"), nullable=True
+    )
     # "pending" (row created, no tokens yet) | "streaming" (partial content
     # written) | "complete" (terminal) | "error" (terminal, turn failed).
     # user/tool rows are always "complete" immediately — only assistant rows
@@ -86,3 +94,6 @@ class ChatMessage(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     session: Mapped["ChatSession"] = relationship(back_populates="messages")
+    # Read-only lookup for ChatMessageResponse's artifact_data field — no
+    # back_populates, since Artifact doesn't need a reverse collection.
+    artifact: Mapped["Artifact | None"] = relationship(viewonly=True)

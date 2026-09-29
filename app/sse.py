@@ -44,6 +44,11 @@ class SSEEvent(StrEnum):
     # lets the frontend render the chart live, mid-turn, the same way
     # SECTION_READY does for pipeline sections.
     CHAT_CHART_READY = "chat_chart_ready"
+    # Fired the moment a generate_presentation_tool/generate_word_document_tool/
+    # generate_pdf_report_tool/revise_artifact_tool call produces a file —
+    # lets the frontend render a downloadable artifact card live, mirroring
+    # CHAT_CHART_READY.
+    CHAT_ARTIFACT_READY = "chat_artifact_ready"
 
     # Deep Agent planning (write_todos) visibility — purely additive, safe
     # for a frontend that doesn't recognize it to ignore.

@@ -1,3 +1,4 @@
+from app.models.artifact import Artifact
 from app.models.business_profile import BusinessProfile
 from app.models.chat import ChatMessage, ChatSession
 from app.models.glossary_cache import GlossaryCache
@@ -13,4 +14,5 @@ __all__ = [
     "ChatMessage",
     "MemoryEntry",
     "GlossaryCache",
+    "Artifact",
 ]

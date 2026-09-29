@@ -45,6 +45,24 @@ class Settings(BaseSettings):
     orchestrator_model_call_limit: int = 20
     chat_model_call_limit: int = 8
 
+    # Artifact generation (DOCX/PPTX/PDF via MCP) rollout — off by default,
+    # like deepagents_enabled, since it depends on three sibling Docker
+    # services (see docker-compose.yml) that a given environment may not
+    # have running yet.
+    mcp_artifacts_enabled: bool = False
+    artifact_storage_dir: str = "./generated_artifacts"
+    presenton_url: str = "http://presenton:80"
+    presenton_api_key: str = ""
+    mcp_office_docs_url: str = "http://mcp-office-docs:8958"
+    mcp_office_docs_api_key: str = ""
+    mcp_pdf_url: str = "http://mcp-pdf:3010"
+    # Office-docs/Presenton's "LOCAL" storage strategy writes generated files
+    # to their own container's disk, not into the MCP response body — this is
+    # a Docker volume mounted into both that container and this backend's
+    # container at the same path, so a returned filename can be read straight
+    # off disk. See docker-compose.yml.
+    mcp_shared_output_dir: str = "/shared_artifacts"
+
     @property
     def allowed_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.allowed_origins.split(",") if origin.strip()]

@@ -21,6 +21,7 @@ dependencies = [
     "alembic>=1.19.1",
     "psycopg[binary]>=3.2.0",
     "deepagents>=0.7.14",
+    "langchain-mcp-adapters>=0.3.2",
 ]
 
 [project.optional-dependencies]

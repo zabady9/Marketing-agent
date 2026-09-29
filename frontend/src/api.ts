@@ -1,4 +1,5 @@
 import type {
+  ArtifactSummary,
   BusinessProfile,
   ChatMessageRecord,
   ChatSessionRecord,
@@ -99,6 +100,20 @@ export async function exportChatMarkdown(
     throw new Error(await errorMessageFor(res))
   }
   return res.text()
+}
+
+// Fetches a generated artifact's raw bytes as a Blob — the first binary
+// (non-text) fetch in this file; every other export helper above reads
+// `res.text()`. Callers build the download filename from the ArtifactSummary
+// they already have (title + format) rather than parsing Content-Disposition,
+// since the browser's `download` attribute on the anchor element is what
+// actually names the saved file, not the response header.
+export async function downloadChatArtifact(projectId: string, artifact: ArtifactSummary): Promise<Blob> {
+  const res = await fetch(`${BASE}/api/projects/${projectId}/chat/artifacts/${artifact.id}/download`)
+  if (!res.ok) {
+    throw new Error(await errorMessageFor(res))
+  }
+  return res.blob()
 }
 
 export async function createProject(): Promise<string> {

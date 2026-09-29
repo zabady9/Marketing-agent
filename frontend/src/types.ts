@@ -81,6 +81,17 @@ export interface ChartSpec {
   y_label: string | null
 }
 
+// Matches app/schemas/artifact.py::ArtifactSummary — metadata for a
+// generated DOCX/PPTX/PDF file, never the raw bytes (fetched separately via
+// downloadChatArtifact).
+export interface ArtifactSummary {
+  id: string
+  format: 'docx' | 'pptx' | 'pdf'
+  title: string
+  filename: string
+  size_bytes: number
+}
+
 export interface ChatMessageRecord {
   id: string
   role: ChatRole
@@ -92,6 +103,11 @@ export interface ChatMessageRecord {
   // Set only on a persisted tool-role row for a successful
   // generate_chart_tool call — see app/models/chat.py::ChatMessage.chart_data.
   chart_data: ChartSpec | null
+  // Set only on a persisted tool-role row for a successful
+  // generate_presentation_tool/generate_word_document_tool/
+  // generate_pdf_report_tool/revise_artifact_tool call — see
+  // app/models/chat.py::ChatMessage.artifact_id.
+  artifact_data: ArtifactSummary | null
 }
 
 export interface ChatSessionRecord {
@@ -132,6 +148,17 @@ export interface ChatChartReadyPayload {
   message_id: string
   tool_name: string
   chart: ChartSpec
+}
+
+// Payload for the chat_artifact_ready SSE event
+// (app/sse.py::SSEEvent.CHAT_ARTIFACT_READY) — pushed live the moment a
+// generate_presentation_tool/generate_word_document_tool/
+// generate_pdf_report_tool/revise_artifact_tool call succeeds, mirroring
+// ChatChartReadyPayload.
+export interface ChatArtifactReadyPayload {
+  message_id: string
+  tool_name: string
+  artifact: ArtifactSummary
 }
 
 export interface BusinessProfile {

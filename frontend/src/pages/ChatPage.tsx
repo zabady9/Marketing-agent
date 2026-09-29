@@ -19,7 +19,10 @@ import { SensitivityCharts } from '../components/report/charts/SensitivityCharts
 import { CashFlowChart } from '../components/report/charts/CashFlowChart'
 import { ConfidenceMeter } from '../components/report/charts/ConfidenceMeter'
 import { GenericChart } from '../components/report/charts/GenericChart'
+import { ArtifactCard } from '../components/report/ArtifactCard'
 import type {
+  ArtifactSummary,
+  ChatArtifactReadyPayload,
   ChatChartReadyPayload,
   ChatMessageCompletedPayload,
   ChatMessageDeltaPayload,
@@ -48,6 +51,7 @@ type TranscriptItem =
   | { kind: 'tool_error'; toolName: string; error: string }
   | { kind: 'section'; section: string; data: unknown; studyId?: string }
   | { kind: 'chart'; chart: ChartSpec; messageId: string }
+  | { kind: 'artifact'; artifact: ArtifactSummary; messageId: string }
 
 function historyToTranscript(messages: ChatMessageRecord[]): TranscriptItem[] {
   // Every successful study run now has its own permanent, independently
@@ -66,6 +70,9 @@ function historyToTranscript(messages: ChatMessageRecord[]): TranscriptItem[] {
     }
     if (m.role === 'tool' && m.tool_name === 'generate_chart_tool' && m.chart_data) {
       items.push({ kind: 'chart', chart: m.chart_data, messageId: m.id })
+    }
+    if (m.role === 'tool' && m.artifact_data) {
+      items.push({ kind: 'artifact', artifact: m.artifact_data, messageId: m.id })
     }
   })
   return items
@@ -452,6 +459,12 @@ export function ChatPage() {
           ...prev,
           { kind: 'chart', chart: payload.chart, messageId: payload.message_id },
         ])
+      } else if (evt.event === 'chat_artifact_ready') {
+        const payload = evt.data as ChatArtifactReadyPayload
+        setTranscript((prev) => [
+          ...prev,
+          { kind: 'artifact', artifact: payload.artifact, messageId: payload.message_id },
+        ])
       } else if (evt.event === 'chat_message_delta') {
         const payload = evt.data as ChatMessageDeltaPayload
         setTranscript((prev) => {
@@ -637,6 +650,13 @@ export function ChatPage() {
                         <SectionCardShell title={item.chart.title}>
                           <GenericChart chart={item.chart} compact />
                         </SectionCardShell>
+                      </div>
+                    )
+                  }
+                  if (item.kind === 'artifact') {
+                    return (
+                      <div key={i} className="flex justify-start">
+                        <ArtifactCard projectId={projectId!} artifact={item.artifact} />
                       </div>
                     )
                   }

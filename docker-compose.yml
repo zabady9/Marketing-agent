@@ -1,0 +1,105 @@
+# Local development stack for artifact generation (MCP_ARTIFACTS_ENABLED=true).
+#
+# Adds three sibling services alongside the backend, all reached over HTTP/MCP
+# — no subprocess spawning inside the backend's own container. Production
+# wiring for these three services lives in a separate ops/deploy repo (see
+# the .env's POSTIZ_*/DOMAIN/CERTBOT_EMAIL keys) and needs coordinating there
+# separately from this file, which is for local dev only.
+#
+# `office-docs-output`/`pdf-output` are named volumes shared between the
+# generating service and the backend — mcp-ms-office-documents (and,
+# defensively, the PDF server) write files to their own on-disk "output"
+# folder rather than embedding bytes in the MCP response; mounting the same
+# volume into the backend at settings.mcp_shared_output_dir lets it read the
+# file straight off disk. CONFIRM this is actually how each service behaves
+# the first time this stack runs for real — see the TODOs in
+# app/services/artifact_generation.py — and drop the volume for whichever
+# service turns out to return the file inline instead.
+
+services:
+  backend:
+    build: .
+    ports:
+      - "8007:8080"
+    env_file:
+      - .env
+    environment:
+      MCP_ARTIFACTS_ENABLED: "true"
+      # Container-to-container traffic goes straight to nginx's internal
+      # port (80), not the published host port (5001) — those are unrelated.
+      PRESENTON_URL: "http://presenton:80"
+      MCP_OFFICE_DOCS_URL: "http://mcp-office-docs:8958"
+      MCP_PDF_URL: "http://mcp-pdf:3010"
+      MCP_SHARED_OUTPUT_DIR: "/shared_artifacts"
+    volumes:
+      # Mounted at the same path MCP_SHARED_OUTPUT_DIR points at below — a
+      # subdirectory here (e.g. /shared_artifacts/office-docs) would silently
+      # mismatch, since only the reported file's basename is resolved
+      # against this exact path (see _extract_bytes_and_filename).
+      - office-docs-output:/shared_artifacts
+      - artifact-storage:/app/generated_artifacts
+      # Bind-mounts the same app.db this app already used outside Docker
+      # (DATABASE_URL=sqlite:///./app.db, relative to the container's /app
+      # workdir) — without this, every container rebuild/recreate started
+      # from a brand-new empty database, silently wiping any business
+      # profile/chat history built up in a previous run.
+      - ./app.db:/app/app.db
+    depends_on:
+      - presenton
+      - mcp-office-docs
+      - mcp-pdf
+
+  # Self-hosted AI presentation engine (Apache-2.0) — PPTX + slide-shaped PDF.
+  # https://github.com/presenton/presenton — env var names confirmed against
+  # that repo's own docker-compose.yml.
+  presenton:
+    image: ghcr.io/presenton/presenton:latest
+    ports:
+      # Confirmed via `docker compose exec presenton ss -tlnp` — nginx (the
+      # actual public entrypoint, proxying to Next.js on :3000, FastAPI on
+      # :8000, and FastMCP on :8001 internally) listens on 80. The startup
+      # banner's "http://127.0.0.1:5001" is just a suggested host-port label,
+      # not something the container itself binds — 5001/9090 were both wrong.
+      - "5001:80"
+    environment:
+      # Reuses this app's existing Gemini key — no separate LLM cost.
+      LLM: "google"
+      GOOGLE_API_KEY: "${GOOGLE_API_KEY}"
+      GOOGLE_MODEL: "${REASONING_MODEL:-gemini-2.5-pro}"
+      # API-based image provider so no GPU is required for self-hosting.
+      # Requires a free Pexels API key (pexels.com/api) — swap for another
+      # supported provider per docs.presenton.ai if preferred.
+      IMAGE_PROVIDER: "pexels"
+      PEXELS_API_KEY: "${PEXELS_API_KEY}"
+    volumes:
+      - presenton-data:/app/user_data
+
+  # DOCX (+ future XLSX/email) generation (MIT). Streamable-HTTP MCP at /mcp.
+  # https://github.com/ForLegalAI/mcp-ms-office-documents
+  mcp-office-docs:
+    image: georgx22/mcp-office-docs:latest
+    ports:
+      - "8958:8958"
+    environment:
+      UPLOAD_STRATEGY: "LOCAL"
+    volumes:
+      - office-docs-output:/app/output
+
+  # Report-style (flowing text, not slide-shaped) markdown -> PDF (Apache-2.0).
+  # https://github.com/cyanheads/docgen-mcp-server — bundled pdf-lib renderer,
+  # no external API/key. Delivers the rendered file as inline base64 in the
+  # tool response (no shared volume needed) as long as it stays under
+  # DOCGEN_INLINE_MAX_BYTES (default 5MB — comfortably above a text report).
+  mcp-pdf:
+    image: ghcr.io/cyanheads/docgen-mcp-server:latest
+    ports:
+      - "3010:3010"
+    environment:
+      MCP_TRANSPORT_TYPE: "http"
+      MCP_HTTP_PORT: "3010"
+      MCP_AUTH_MODE: "none"
+
+volumes:
+  presenton-data:
+  office-docs-output:
+  artifact-storage:
