@@ -1245,14 +1245,6 @@ async def _run_legacy_tool_loop(
     else:
         llm = _build_llm().bind_tools(tools)
 
-    # Narration banked from each round that actually said something, kept
-    # across rounds and joined at the end — a round's content used to
-    # overwrite assistant_message.content outright, discarding any earlier
-    # round's narration the moment a later round ran (e.g. a short "let me
-    # try again" after a validation error, or a final round that's just a
-    # trailing "\n" after a successful tool call).
-    narration_parts: list[str] = []
-
     for round_num in range(MAX_TOOL_ROUNDS):
         response = None
         last_flush = time.monotonic()
@@ -1263,21 +1255,15 @@ async def _run_legacy_tool_loop(
                 await queue.put(SSEEvent.CHAT_MESSAGE_DELTA, {"content": delta_text})
             now = time.monotonic()
             if now - last_flush >= _FLUSH_INTERVAL_SECONDS:
-                in_progress = _extract_text(response.content)
-                assistant_message.content = "\n\n".join(
-                    narration_parts + ([in_progress] if in_progress.strip() else [])
-                )
+                assistant_message.content = _extract_text(response.content)
                 assistant_message.status = "streaming"
                 db.commit()
                 last_flush = now
 
-        # Bank whatever this round produced (even if it never hit the
-        # throttle interval above) before moving on — blank/whitespace-only
-        # rounds (e.g. Gemini's silent final "\n") contribute nothing.
-        round_text = _extract_text(response.content)
-        if round_text.strip():
-            narration_parts.append(round_text.strip())
-        assistant_message.content = "\n\n".join(narration_parts)
+        # Flush whatever this round produced even if it never hit the
+        # throttle interval above (e.g. a short reply, or the tail end
+        # after the last throttled flush).
+        assistant_message.content = _extract_text(response.content)
         assistant_message.status = "streaming"
         db.commit()
 
@@ -1361,25 +1347,16 @@ async def _run_deep_agent_turn(
         checkpointer=None,
     )
 
-    # Narration banked from each round that actually said something (see the
-    # matching comment in _run_legacy_tool_loop) — a round boundary used to
-    # just reset response_msg and let the final round's text (often blank,
-    # e.g. Gemini's silent final "\n" after a successful tool call) stand in
-    # for the whole reply, discarding every earlier round's real narration.
-    narration_parts: list[str] = []
     response_msg = None
     last_flush = time.monotonic()
     try:
         async for mode, chunk in agent.astream({"messages": history}, stream_mode=["messages", "updates"]):
             if mode == "updates":
                 if "tools" in chunk:
-                    # A tool round just completed — bank this round's
-                    # narration before the NEXT "model" chunks start
-                    # accumulating the round that follows the tool call.
-                    if response_msg is not None:
-                        round_text = _extract_text(response_msg.content)
-                        if round_text.strip():
-                            narration_parts.append(round_text.strip())
+                    # A tool round just completed — the NEXT "model" chunks
+                    # start a fresh reply; accumulating across this boundary
+                    # would concatenate an earlier round's (often empty, or
+                    # preamble) text with the final answer.
                     response_msg = None
                 continue
 
@@ -1393,10 +1370,7 @@ async def _run_deep_agent_turn(
                 await queue.put(SSEEvent.CHAT_MESSAGE_DELTA, {"content": delta_text})
             now = time.monotonic()
             if now - last_flush >= _FLUSH_INTERVAL_SECONDS:
-                in_progress = _extract_text(response_msg.content)
-                assistant_message.content = "\n\n".join(
-                    narration_parts + ([in_progress] if in_progress.strip() else [])
-                )
+                assistant_message.content = _extract_text(response_msg.content)
                 assistant_message.status = "streaming"
                 db.commit()
                 last_flush = now
@@ -1406,12 +1380,9 @@ async def _run_deep_agent_turn(
         )
         return _FALLBACK_MESSAGE
 
-    if response_msg is not None:
-        round_text = _extract_text(response_msg.content)
-        if round_text.strip():
-            narration_parts.append(round_text.strip())
-
-    return "\n\n".join(narration_parts)
+    if response_msg is None:
+        return ""
+    return _extract_text(response_msg.content)
 
 
 @traceable(name="Chat Turn", run_type="chain")
