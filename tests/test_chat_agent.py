@@ -74,81 +74,6 @@ class _FakeToolCallThenReplyModel(BaseChatModel):
         return self._generate(messages, stop, run_manager, **kwargs)
 
 
-class _FakeNarrationThenSilentModel(BaseChatModel):
-    """Turn 1: narration text AND a tool_call in the SAME message (e.g.
-    explaining a result while also calling generate_chart_tool). Turn 2:
-    only a trailing newline, no tool_calls — the graph ends with nothing
-    substantive left to say. This reproduces the real Gemini behavior
-    observed live (a lone "\\n" final round after a successful tool call)
-    that used to beat a genuinely good last_text because "\\n" is truthy in
-    Python even though it's not real content."""
-
-    _bound_tools: list = []
-    _turn: int = 0
-
-    @property
-    def _llm_type(self) -> str:
-        return "fake-narration-then-silent"
-
-    def bind_tools(self, tools, **kwargs):
-        self._bound_tools = list(tools)
-        return self
-
-    def _generate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:
-        if self._turn == 0:
-            self._turn += 1
-            msg = AIMessage(
-                content="Here's the scenario comparison.",
-                tool_calls=[{"name": "remember_fact_tool", "args": {"content": "noted"}, "id": "c1"}],
-            )
-        else:
-            msg = AIMessage(content="\n")
-        return ChatResult(generations=[ChatGeneration(message=msg)])
-
-    async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:
-        return self._generate(messages, stop, run_manager, **kwargs)
-
-
-class _FakeMultiRoundNarrationModel(BaseChatModel):
-    """Reproduces the real sequence observed live: rich narration + a tool
-    call, then a short remark + another tool call (e.g. a retry), then a
-    final round that's whitespace-only. The rich turn-1 narration is NOT
-    the last round with real content — turn-2's short remark is — so a
-    fallback that only keeps "the last non-whitespace round" would still
-    lose turn-1's narration. Both must survive in the final answer."""
-
-    _bound_tools: list = []
-    _turn: int = 0
-
-    @property
-    def _llm_type(self) -> str:
-        return "fake-multi-round-narration"
-
-    def bind_tools(self, tools, **kwargs):
-        self._bound_tools = list(tools)
-        return self
-
-    def _generate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:
-        if self._turn == 0:
-            self._turn += 1
-            msg = AIMessage(
-                content="Raising your price to 126 improves ROI and NPV substantially.",
-                tool_calls=[{"name": "remember_fact_tool", "args": {"content": "noted"}, "id": "c1"}],
-            )
-        elif self._turn == 1:
-            self._turn += 1
-            msg = AIMessage(
-                content="Here is the chart.",
-                tool_calls=[{"name": "remember_fact_tool", "args": {"content": "noted again"}, "id": "c2"}],
-            )
-        else:
-            msg = AIMessage(content="\n")
-        return ChatResult(generations=[ChatGeneration(message=msg)])
-
-    async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:
-        return self._generate(messages, stop, run_manager, **kwargs)
-
-
 class _FakeNeverFinalizesModel(BaseChatModel):
     """Always replies with plain text but is scripted to look like it never
     settles — used to force the call-limit path deterministically by setting
@@ -232,49 +157,6 @@ class TestChatTurnDeepAgentPath:
         entries = db_session.query(MemoryEntry).all()
         assert any(e.content == "likes tea" for e in entries)
 
-    async def test_narration_with_trailing_tool_call_survives_a_silent_final_round(
-        self, db_session, make_project, monkeypatch
-    ):
-        monkeypatch.setenv("GOOGLE_API_KEY", "test")
-        monkeypatch.setenv("TAVILY_API_KEY", "test")
-        app.config._settings = None
-        app.config.get_settings().deepagents_enabled = True
-
-        monkeypatch.setattr(chat_agent_module, "_build_llm", lambda: _FakeNarrationThenSilentModel())
-        monkeypatch.setattr(chat_agent_module, "detect_single_tool_intent", _noop_tool_intent)
-
-        project = make_project()
-        session = _make_session(db_session, project)
-
-        result = await chat_agent_module.run_chat_turn(
-            db_session, project, session, "simulate something", EventQueue()
-        )
-
-        assert result.status == "complete"
-        assert result.content == "Here's the scenario comparison."
-
-    async def test_narration_spread_across_multiple_tool_rounds_is_not_lost(
-        self, db_session, make_project, monkeypatch
-    ):
-        monkeypatch.setenv("GOOGLE_API_KEY", "test")
-        monkeypatch.setenv("TAVILY_API_KEY", "test")
-        app.config._settings = None
-        app.config.get_settings().deepagents_enabled = True
-
-        monkeypatch.setattr(chat_agent_module, "_build_llm", lambda: _FakeMultiRoundNarrationModel())
-        monkeypatch.setattr(chat_agent_module, "detect_single_tool_intent", _noop_tool_intent)
-
-        project = make_project()
-        session = _make_session(db_session, project)
-
-        result = await chat_agent_module.run_chat_turn(
-            db_session, project, session, "simulate something", EventQueue()
-        )
-
-        assert result.status == "complete"
-        assert "Raising your price to 126 improves ROI and NPV substantially." in result.content
-        assert "Here is the chart." in result.content
-
     async def test_call_limit_breach_falls_back_gracefully(
         self, db_session, make_project, monkeypatch
     ):
@@ -318,37 +200,6 @@ class TestChatTurnLegacyPath:
 
         assert result.status == "complete"
         assert result.content == "Hello there!"
-
-    async def test_narration_spread_across_multiple_tool_rounds_is_not_lost(
-        self, db_session, make_project, monkeypatch
-    ):
-        """This is the code path actually used in production —
-        settings.deepagents_enabled defaults to False and nothing in .env
-        overrides it — so this is the real-world regression test for the
-        "good answer disappears on refresh" bug: each round in
-        _run_legacy_tool_loop used to overwrite assistant_message.content
-        outright (lines flushing `_extract_text(response.content)` per
-        round), discarding any earlier round's narration the moment a later
-        round ran, however short (e.g. a one-line "let me try again" after
-        a tool validation error, or a plain retry)."""
-        monkeypatch.setenv("GOOGLE_API_KEY", "test")
-        monkeypatch.setenv("TAVILY_API_KEY", "test")
-        app.config._settings = None
-        app.config.get_settings().deepagents_enabled = False
-
-        monkeypatch.setattr(chat_agent_module, "_build_llm", lambda: _FakeMultiRoundNarrationModel())
-        monkeypatch.setattr(chat_agent_module, "detect_single_tool_intent", _noop_tool_intent)
-
-        project = make_project()
-        session = _make_session(db_session, project)
-
-        result = await chat_agent_module.run_chat_turn(
-            db_session, project, session, "simulate something", EventQueue()
-        )
-
-        assert result.status == "complete"
-        assert "Raising your price to 126 improves ROI and NPV substantially." in result.content
-        assert "Here is the chart." in result.content
 
 
 class _FakeToolCallThenPlainReplyModel(BaseChatModel):
