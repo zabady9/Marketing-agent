@@ -265,11 +265,14 @@ def _extract_docgen_inline_bytes(message: ToolMessage) -> bytes:
     """docgen_render_pdf's response shape is confirmed (unlike the pptx/docx
     servers' — see _extract_bytes_and_filename): every render returns a
     DocumentEnvelope in the MCP result's structuredContent, surfaced here as
-    message.artifact["structured_content"], with `inlineBase64` populated
-    whenever the file is at or under DOCGEN_INLINE_MAX_BYTES (default 5MB —
-    comfortably above a text report). No shared volume needed for this one."""
+    message.artifact["structured_content"]["document"], with `inlineBase64`
+    populated whenever the file is at or under DOCGEN_INLINE_MAX_BYTES
+    (default 5MB — comfortably above a text report). No shared volume needed
+    for this one. Confirmed live against a real docgen-mcp-server response —
+    the envelope is nested one level under "document", not top-level."""
     structured = (message.artifact or {}).get("structured_content") or {}
-    inline = structured.get("inlineBase64")
+    document = structured.get("document") or {}
+    inline = document.get("inlineBase64")
     if not inline:
         raise ArtifactGenerationError(
             "docgen_render_pdf didn't return inline file bytes — the report "

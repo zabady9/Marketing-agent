@@ -257,13 +257,15 @@ class TestGenerateDocx:
 def _docgen_result(*, inline_base64: str | None) -> ToolMessage:
     """Mirrors docgen_render_pdf's real DocumentEnvelope shape — delivered as
     MCP structuredContent, surfaced by langchain-mcp-adapters as the
-    ToolMessage's `.artifact["structured_content"]`, not a content block."""
-    structured = {"documentId": "doc-1", "pageCount": 1}
+    ToolMessage's `.artifact["structured_content"]["document"]`, not a
+    content block. Confirmed live against a real docgen-mcp-server response —
+    the envelope is nested one level under "document", not top-level."""
+    document = {"documentId": "doc-1", "pageCount": 1}
     if inline_base64 is not None:
-        structured["inlineBase64"] = inline_base64
+        document["inlineBase64"] = inline_base64
     return ToolMessage(
         content="Rendered 1-page PDF.",
-        artifact={"structured_content": structured},
+        artifact={"structured_content": {"document": document}},
         tool_call_id="call-1",
         status="success",
     )
