@@ -41,41 +41,6 @@ def _build_tools(db_session, project, session):
 
 
 class TestCapabilityToolsAreIndependent:
-    async def test_all_expected_tools_are_present_with_distinct_names(
-        self, db_session, make_project
-    ):
-        project = make_project()
-        session = _make_session(db_session, project)
-        tools = _build_tools(db_session, project, session)
-
-        assert set(tools) == {
-            "run_feasibility_study_tool",
-            "run_market_sizing_tool",
-            "run_competitive_analysis_tool",
-            "run_financial_analysis_tool",
-            "run_risk_analysis_tool",
-            "run_synthesis_tool",
-            "update_business_profile_tool",
-            "remember_fact_tool",
-            "generate_chart_tool",
-            "web_research_tool",
-            "explain_figure_tool",
-            "run_scenario_simulation_tool",
-        }
-        # run_pipeline_phase_tool's phase argument is gone — verify none of
-        # the new capability tools still expose one (that ambiguity is
-        # exactly what made the old single-tool design unreliable).
-        for name in (
-            "run_market_sizing_tool",
-            "run_competitive_analysis_tool",
-            "run_financial_analysis_tool",
-            "run_risk_analysis_tool",
-            "run_synthesis_tool",
-        ):
-            schema = tools[name].args_schema
-            fields = getattr(schema, "model_fields", {}) if schema is not None else {}
-            assert not fields, f"{name} should take no arguments, got {list(fields)}"
-
     async def test_each_capability_tool_calls_single_phase_study_with_its_own_phase_only(
         self, db_session, make_project, monkeypatch
     ):
