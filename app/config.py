@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     # like deepagents_enabled, since it depends on three sibling Docker
     # services (see docker-compose.yml) that a given environment may not
     # have running yet.
-    mcp_artifacts_enabled: bool = False
+    mcp_artifacts_enabled: bool = True
     artifact_storage_dir: str = "./generated_artifacts"
     presenton_url: str = "http://presenton:80"
     presenton_api_key: str = ""
