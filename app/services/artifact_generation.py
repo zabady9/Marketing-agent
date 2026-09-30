@@ -40,7 +40,12 @@ from app.services.mcp_clients import get_allowed_tool
 
 logger = logging.getLogger(__name__)
 
-_CALL_TIMEOUT_SECONDS = 60
+# Wraps every single MCP call (session setup + the call itself), including
+# start_standard_presentation — confirmed live that Presenton doesn't return
+# a task id instantly; it does real work (LLM outline expansion) first, and
+# on a cross-Cloud-Run-service hop this comfortably exceeded 60s, tearing
+# down and reopening the MCP session before ever getting a clean response.
+_CALL_TIMEOUT_SECONDS = 180
 _FILENAME_RE = re.compile(r"[\w.\-/]+\.(?:docx|pptx|pdf)", re.IGNORECASE)
 # Confirmed against a real run: a 2-slide deck took ~70s end to end (queued ->
 # layout selection -> slide generation -> asset fetch -> completed) — scaled
