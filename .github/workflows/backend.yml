@@ -63,8 +63,8 @@ jobs:
             --project="${{ vars.GCP_PROJECT_ID }}" \
             --region="${{ vars.GCP_REGION }}" \
             --allow-unauthenticated \
-            --set-secrets="GOOGLE_API_KEY=GOOGLE_API_KEY:latest,TAVILY_API_KEY=TAVILY_API_KEY:latest,ADMIN_API_KEY=ADMIN_API_KEY:latest,DATABASE_URL=DATABASE_URL:latest,PRESENTON_API_KEY=PRESENTON_API_KEY:latest,LANGSMITH_API_KEY=LANGSMITH_API_KEY:latest" \
-            --set-env-vars="^;^APP_ENV=production;DEBUG=false;ALLOWED_ORIGINS=${{ vars.ALLOWED_ORIGINS }};REASONING_MODEL=gemini-2.5-pro;CHEAP_MODEL=gemini-2.5-flash;MAX_TOKENS=8192;LANGSMITH_TRACING=true;LANGSMITH_PROJECT=marketing-agent;MCP_PDF_URL=https://docgen-pdf-365888626215.us-central1.run.app;PRESENTON_URL=https://presenton-365888626215.us-central1.run.app" \
+            --set-secrets="GOOGLE_API_KEY=GOOGLE_API_KEY:latest,TAVILY_API_KEY=TAVILY_API_KEY:latest,ADMIN_API_KEY=ADMIN_API_KEY:latest,DATABASE_URL=DATABASE_URL:latest,PRESENTON_API_KEY=PRESENTON_API_KEY:latest,LANGSMITH_API_KEY=LANGSMITH_API_KEY:latest,MCP_OFFICE_DOCS_API_KEY=MCP_OFFICE_DOCS_API_KEY:latest" \
+            --set-env-vars="^;^APP_ENV=production;DEBUG=false;ALLOWED_ORIGINS=${{ vars.ALLOWED_ORIGINS }};REASONING_MODEL=gemini-2.5-pro;CHEAP_MODEL=gemini-2.5-flash;MAX_TOKENS=8192;LANGSMITH_TRACING=true;LANGSMITH_PROJECT=marketing-agent;MCP_PDF_URL=https://docgen-pdf-365888626215.us-central1.run.app;PRESENTON_URL=https://presenton-365888626215.us-central1.run.app;MCP_OFFICE_DOCS_URL=https://mcp-office-docs-365888626215.us-central1.run.app" \
             --min-instances=0 \
             --max-instances=2 \
             --memory=512Mi \

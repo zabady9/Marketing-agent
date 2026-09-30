@@ -238,6 +238,43 @@ class TestGenerateDocx:
         with open(result.path, "rb") as f:
             assert f.read() == payload
 
+    async def test_downloads_gcs_signed_url_reported_in_text(self, tmp_dirs, monkeypatch):
+        """Regression test: production (Cloud Run, UPLOAD_STRATEGY=GCS) has no
+        filesystem shared with this backend — mcp-ms-office-documents reports
+        a real fetchable GCS signed URL instead of a path, confirmed live
+        against a real deployed instance. Must be downloaded directly, not
+        resolved against shared_output_dir."""
+        storage_dir, shared_dir = tmp_dirs
+        payload = b"fake docx bytes from gcs"
+        url = "https://storage.googleapis.com/some-bucket/art-7.docx?X-Goog-Signature=abc123"
+
+        tool = AsyncMock()
+        tool.ainvoke = AsyncMock(
+            return_value=_text_result(
+                f"Link to created document to be shared with user in markdown format: {url} . "
+                "Link is valid for 3600 seconds."
+            )
+        )
+        monkeypatch.setattr(
+            artifact_generation_module, "get_allowed_tool", AsyncMock(return_value=tool)
+        )
+
+        async def _fake_download(requested_url: str) -> bytes:
+            assert requested_url == url
+            return payload
+
+        monkeypatch.setattr(artifact_generation_module, "_download_bytes", _fake_download)
+
+        outline = DocumentOutline(title="Report", sections=[DocumentSection(heading="Overview", body="Text.")])
+        result = await generate_docx(
+            outline, storage_dir=storage_dir, shared_output_dir=shared_dir,
+            project_id="proj-1", artifact_id="art-7",
+        )
+
+        assert result.filename == "art-7.docx"
+        with open(result.path, "rb") as f:
+            assert f.read() == payload
+
     async def test_raises_when_reported_file_is_not_on_disk(self, tmp_dirs, monkeypatch):
         storage_dir, shared_dir = tmp_dirs
         tool = AsyncMock()

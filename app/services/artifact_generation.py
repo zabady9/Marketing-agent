@@ -11,12 +11,16 @@ rather than guessed from docs:
   bearer key used for the MCP call. See generate_pptx/_poll_presenton_job.
 - docgen (pdf): synchronous, delivers the file as inline base64 in the MCP
   result's structuredContent. See generate_pdf/_extract_docgen_inline_bytes.
-- mcp-ms-office-documents (docx): NOT yet confirmed against a live run — its
-  "LOCAL" storage strategy docs stop short of a concrete example, so
-  _extract_bytes_and_filename defensively handles either an embedded blob or
-  a filename/path resolved against a shared Docker volume
-  (settings.mcp_shared_output_dir). Confirm and simplify once exercised for
-  real, the same way generate_pptx/generate_pdf were.
+- mcp-ms-office-documents (docx): confirmed against a real running instance
+  in both configurations this app actually uses. Local dev (docker-compose)
+  runs UPLOAD_STRATEGY=LOCAL, writing to a Docker volume shared with this
+  backend (settings.mcp_shared_output_dir) and reporting only a filename/path
+  in the tool's text response. Production (Cloud Run, no shared filesystem
+  between services) runs UPLOAD_STRATEGY=GCS instead, which returns a real
+  GCS signed URL in the same text response — confirmed live, e.g. "Link to
+  created document to be shared with user in markdown format:
+  https://storage.googleapis.com/<bucket>/<file>?X-Goog-...". See
+  _extract_bytes_and_filename, which handles both.
 """
 
 from __future__ import annotations
@@ -29,6 +33,7 @@ import os
 import re
 import uuid
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 import httpx
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
@@ -47,6 +52,7 @@ logger = logging.getLogger(__name__)
 # down and reopening the MCP session before ever getting a clean response.
 _CALL_TIMEOUT_SECONDS = 180
 _FILENAME_RE = re.compile(r"[\w.\-/]+\.(?:docx|pptx|pdf)", re.IGNORECASE)
+_URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
 # Confirmed against a real run: a 2-slide deck took ~70s end to end (queued ->
 # layout selection -> slide generation -> asset fetch -> completed) — scaled
 # up generously for up to 30 slides.
@@ -109,7 +115,14 @@ async def _invoke(server_name: str, tool_name: str, args: dict) -> ToolMessage:
     return result
 
 
-def _extract_bytes_and_filename(message: ToolMessage, *, shared_output_dir: str) -> tuple[bytes, str]:
+async def _download_bytes(url: str) -> bytes:
+    async with httpx.AsyncClient(timeout=60) as client:
+        response = await client.get(url)
+        response.raise_for_status()
+        return response.content
+
+
+async def _extract_bytes_and_filename(message: ToolMessage, *, shared_output_dir: str) -> tuple[bytes, str]:
     content = message.content
     blocks = content if isinstance(content, list) else [content]
     text_parts: list[str] = []
@@ -123,17 +136,30 @@ def _extract_bytes_and_filename(message: ToolMessage, *, shared_output_dir: str)
             text_parts.append(str(block.get("text", "")))
 
     text = "\n".join(p for p in text_parts if p)
+
+    # Production (Cloud Run, UPLOAD_STRATEGY=GCS) reports a real fetchable
+    # URL — e.g. "Link to created document ...: https://storage.googleapis.com/
+    # <bucket>/<file>?X-Goog-...". Confirmed live: download it directly rather
+    # than assume a shared filesystem that doesn't exist between separate
+    # Cloud Run services.
+    url_match = _URL_RE.search(text)
+    if url_match is not None:
+        url = url_match.group(0).rstrip(".,;)]}")
+        filename = os.path.basename(urlsplit(url).path) or "artifact"
+        return await _download_bytes(url), filename
+
     reported_path = _filename_from_text(text)
     if reported_path is None:
         raise ArtifactGenerationError(
             f"Could not determine the generated file's name/path from the tool "
-            f"response (no embedded file block and no filename found in text): {text!r}"
+            f"response (no embedded file block, URL, or filename found in text): {text!r}"
         )
-    # The reported path (e.g. "/app/output/<id>.docx") is the GENERATING
-    # service's own internal path inside its own container — never valid on
-    # this backend's filesystem directly, confirmed live (that exact path
-    # doesn't exist here). Only the basename is meaningful; resolve it
-    # against wherever this backend has the same shared volume mounted.
+    # Local dev (docker-compose, UPLOAD_STRATEGY=LOCAL): the reported path
+    # (e.g. "/app/output/<id>.docx") is the GENERATING service's own internal
+    # path inside its own container — never valid on this backend's
+    # filesystem directly, confirmed live (that exact path doesn't exist
+    # here). Only the basename is meaningful; resolve it against wherever
+    # this backend has the same shared Docker volume mounted.
     filename = os.path.basename(reported_path)
     candidate_path = os.path.join(shared_output_dir, filename)
     if not os.path.isfile(candidate_path):
@@ -260,7 +286,7 @@ async def generate_docx(
         "create_word_from_markdown",
         {"markdown_content": markdown, "file_name": artifact_id, "add_unique_prefix": False},
     )
-    data, _ = _extract_bytes_and_filename(message, shared_output_dir=shared_output_dir)
+    data, _ = await _extract_bytes_and_filename(message, shared_output_dir=shared_output_dir)
     return _write_artifact_file(
         data, storage_dir=storage_dir, project_id=project_id, artifact_id=artifact_id, ext="docx"
     )
