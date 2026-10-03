@@ -20,8 +20,14 @@ import { CashFlowChart } from '../components/report/charts/CashFlowChart'
 import { ConfidenceMeter } from '../components/report/charts/ConfidenceMeter'
 import { GenericChart } from '../components/report/charts/GenericChart'
 import { ArtifactCard } from '../components/report/ArtifactCard'
+import {
+  PendingAttachmentChips,
+  SentAttachmentChips,
+  usePendingAttachments,
+} from '../components/chat/attachments'
 import type {
   ArtifactSummary,
+  AttachmentSummary,
   ChatArtifactReadyPayload,
   ChatChartReadyPayload,
   ChatMessageCompletedPayload,
@@ -47,6 +53,7 @@ type TranscriptItem =
       content: string
       toolName?: string | null
       streaming?: boolean
+      attachments?: AttachmentSummary[]
     }
   | { kind: 'tool_error'; toolName: string; error: string }
   | { kind: 'section'; section: string; data: unknown; studyId?: string }
@@ -61,7 +68,14 @@ function historyToTranscript(messages: ChatMessageRecord[]): TranscriptItem[] {
   // section cards once its StudyResult loads — see expandStudySections below.
   const items: TranscriptItem[] = []
   messages.forEach((m) => {
-    items.push({ kind: 'message', id: m.id, role: m.role, content: m.content, toolName: m.tool_name })
+    items.push({
+      kind: 'message',
+      id: m.id,
+      role: m.role,
+      content: m.content,
+      toolName: m.tool_name,
+      attachments: m.attachments,
+    })
     // Any successful study-producing tool call (the full study, or one of
     // the single-capability tools) gets a placeholder, upgraded in place to
     // real section card(s) below — not just run_feasibility_study_tool.
@@ -264,7 +278,8 @@ function MessageBubble({ item }: { item: TranscriptItem & { kind: 'message' } })
   if (item.role === 'user') {
     return (
       <div className="flex justify-end">
-        <div className="max-w-md rounded-lg bg-indigo-600 text-white px-4 py-2.5 text-sm">
+        <div className="max-w-md rounded-lg bg-indigo-600 text-white px-4 py-2.5 text-sm whitespace-pre-wrap">
+          {item.attachments && <SentAttachmentChips attachments={item.attachments} />}
           {item.content}
         </div>
       </div>
@@ -310,6 +325,11 @@ export function ChatPage() {
   const [progressLabel, setProgressLabel] = useState<string | null>(null)
   const [sendError, setSendError] = useState<string | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [dragging, setDragging] = useState(false)
+  const attachments = usePendingAttachments(projectId, sessionId)
+  const canSend =
+    !isSending && !attachments.busy && (input.trim().length > 0 || attachments.sendable.length > 0)
   // Tracks the in-flight run's study id so live section_ready cards can be
   // stamped with it as they arrive — set once at push-time, not read
   // reactively later, so each card stays correctly attributed even if a
@@ -541,17 +561,36 @@ export function ChatPage() {
   }
 
   async function handleSend() {
-    if (!projectId || !sessionId || !input.trim() || isSending) return
+    if (!projectId || !sessionId || !canSend) return
     const content = input.trim()
+    const sent = attachments.sendable.map((p) => p.attachment!)
     const wasFirstMessage = !transcript.some((item) => item.kind === 'message' && item.role === 'user')
     const localId = `local-${Date.now()}`
     setInput('')
     setSendError(null)
-    setTranscript((prev) => [...prev, { kind: 'message', id: localId, role: 'user', content }])
+    setTranscript((prev) => [
+      ...prev,
+      { kind: 'message', id: localId, role: 'user', content, attachments: sent },
+    ])
     setIsSending(true)
 
     try {
-      await consumeChatEvents(streamChatMessage(projectId, sessionId, content))
+      const stream = streamChatMessage(
+        projectId,
+        sessionId,
+        content,
+        sent.map((a) => a.id),
+      )
+      // The request (and its 409/404 checks) only goes out on the first
+      // next() — clear the chips once it's accepted, not before.
+      const first = await stream.next()
+      attachments.clearSent()
+      await consumeChatEvents(
+        (async function* () {
+          if (!first.done) yield first.value
+          yield* stream
+        })(),
+      )
     } catch (err) {
       if (err instanceof GenerationInProgressError) {
         // The backend never accepted this turn — drop the optimistic bubble
@@ -624,7 +663,29 @@ export function ChatPage() {
           </ul>
         </aside>
 
-        <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+        <div
+          className={`relative flex-1 min-h-0 flex flex-col overflow-hidden ${dragging ? 'ring-2 ring-inset ring-indigo-400' : ''}`}
+          onDragOver={(e) => {
+            if (!e.dataTransfer.types.includes('Files')) return
+            e.preventDefault()
+            setDragging(true)
+          }}
+          onDragLeave={(e) => {
+            if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
+            setDragging(false)
+          }}
+          onDrop={(e) => {
+            if (!e.dataTransfer.files.length) return
+            e.preventDefault()
+            setDragging(false)
+            attachments.addFiles(e.dataTransfer.files)
+          }}
+        >
+          {dragging && (
+            <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-indigo-50/70 text-sm font-medium text-indigo-700">
+              Drop files to attach
+            </div>
+          )}
           <div className="flex-1 min-h-0 overflow-y-auto px-4 py-6">
             <div className="max-w-2xl mx-auto space-y-3">
               {loadingHistory && <p className="text-sm text-gray-400">Loading conversation…</p>}
@@ -690,7 +751,28 @@ export function ChatPage() {
           </div>
 
           <div className="shrink-0 border-t border-gray-200 bg-white px-4 py-4">
+            <PendingAttachmentChips pending={attachments.pending} onRemove={attachments.remove} />
             <div className="max-w-2xl mx-auto flex gap-2">
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  if (e.target.files) attachments.addFiles(e.target.files)
+                  e.target.value = ''
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isSending}
+                title="Attach files (any type, up to 2 GB)"
+                aria-label="Attach files"
+                className="rounded-lg border border-gray-300 px-3 py-2.5 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50 transition-colors"
+              >
+                📎
+              </button>
               <input
                 type="text"
                 value={input}
@@ -707,10 +789,10 @@ export function ChatPage() {
               />
               <button
                 onClick={handleSend}
-                disabled={isSending || !input.trim()}
+                disabled={!canSend}
                 className="rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
-                {isSending ? 'Sending…' : 'Send'}
+                {isSending ? 'Sending…' : attachments.busy ? 'Uploading…' : 'Send'}
               </button>
             </div>
           </div>

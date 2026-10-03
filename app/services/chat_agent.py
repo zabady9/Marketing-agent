@@ -17,7 +17,15 @@ from sqlalchemy.orm import Session
 from app.agents.financial import FinancialCalcError, run_full_financial_model
 from app.agents.intake import IntakeHardBlockError
 from app.config import get_settings
-from app.models import Artifact, ChatMessage, ChatSession, MemoryEntry, Project, StudyResult
+from app.models import (
+    Artifact,
+    ChatAttachment,
+    ChatMessage,
+    ChatSession,
+    MemoryEntry,
+    Project,
+    StudyResult,
+)
 from app.schemas.artifact import (
     ArtifactSummary,
     DocumentOutline,
@@ -35,6 +43,7 @@ from app.services.artifact_generation import (
     generate_pptx,
 )
 from app.services.artifact_generation import revise_artifact as run_artifact_revision
+from app.services.attachment_processing import ensure_gemini_files
 from app.services.chat import get_latest_study_id_for_session, maybe_set_title
 from app.services.export import build_study_markdown, synthesize_chat_export
 from app.services.memory import add_memory_entry, list_memory_entries
@@ -90,7 +99,7 @@ def _bootstrap_system_prompt(memory_entries: list[MemoryEntry]) -> str:
         "already know, not just those two. If bootstrap_profile_tool tells "
         "you it still needs the price, ask the user for it and call the tool "
         "again once you have it. Keep the conversation natural — a couple of "
-        "questions at a time, not an interrogation." + memory_section
+        "questions at a time, not an interrogation." + _ATTACHMENT_SECTION + memory_section
     )
 
 
@@ -144,6 +153,21 @@ def _profile_gaps(profile) -> tuple[list[str], list[str]]:
     ]
     return researchable, decision
 
+
+# Appended to both system prompts — user messages can carry files of any
+# type (see _user_message_content for how each kind is replayed).
+_ATTACHMENT_SECTION = (
+    "\n\nThe user can attach files of any type to their messages (documents, "
+    "spreadsheets, slides, PDFs, images, audio, video, code, archives...). "
+    "Attached files appear inside the user's message, either as the file "
+    "itself or as \"[Attached file: ...]\" followed by its extracted text. "
+    "Read them carefully and treat them as source material: answer questions "
+    "about them, and pull business details from them (e.g. a pitch deck or "
+    "financial sheet) instead of asking the user for facts the files already "
+    "contain. When a file is marked as not readable, say what you can (its "
+    "name and type) and ask the user to describe it or send it in another "
+    "format."
+)
 
 _ARTIFACT_CAPABILITY_SECTION = (
     "Use generate_presentation_tool when the user asks for a presentation, "
@@ -267,7 +291,7 @@ def _system_prompt(project: Project, memory_entries: list[MemoryEntry]) -> str:
         "Skip it for a single standalone number with nothing to compare "
         "against. " + artifact_section + "Keep "
         "replies concise and focused on helping the user reason about this "
-        "business idea." + memory_section
+        "business idea." + _ATTACHMENT_SECTION + memory_section
     )
 
 
@@ -1189,10 +1213,49 @@ def _load_history_messages(session: ChatSession) -> list:
         if m.deleted_at is not None:
             continue
         if m.role == "user":
-            messages.append(HumanMessage(content=m.content))
+            messages.append(HumanMessage(content=_user_message_content(m)))
         elif m.role == "assistant":
             messages.append(AIMessage(content=m.content))
     return messages
+
+
+def _format_size(size_bytes: int) -> str:
+    size = float(size_bytes)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size_bytes} B"
+
+
+def _attachment_parts(attachment: ChatAttachment) -> list[dict]:
+    """How one attachment is shown to the model, by ChatAttachment.kind: a
+    native Gemini media part (labelled with its filename), its extracted
+    text, or just its metadata."""
+    label = f"[Attached file: {attachment.filename} ({attachment.content_type}, {_format_size(attachment.size_bytes)})]"
+    if attachment.kind == "gemini_file" and attachment.gemini_file_uri:
+        return [
+            {"type": "text", "text": label},
+            {"type": "media", "file_uri": attachment.gemini_file_uri, "mime_type": attachment.content_type},
+        ]
+    if attachment.kind == "text" and attachment.extracted_text is not None:
+        return [{"type": "text", "text": f"{label}\n{attachment.extracted_text}"}]
+    return [{"type": "text", "text": f"{label} — content not readable, only its name and type are known."}]
+
+
+def _user_message_content(message: ChatMessage) -> str | list[dict]:
+    """A plain string for text-only messages (unchanged from before
+    attachments existed), or a list of content blocks when files are
+    attached."""
+    attachments = message.attachments
+    if not attachments:
+        return message.content
+    parts: list[dict] = []
+    if message.content.strip():
+        parts.append({"type": "text", "text": message.content})
+    for attachment in attachments:
+        parts.extend(_attachment_parts(attachment))
+    return parts
 
 
 def _extract_text(content: object) -> str:
@@ -1392,6 +1455,7 @@ async def run_chat_turn(
     session: ChatSession,
     user_content: str,
     queue: EventQueue,
+    attachment_ids: list[str] | None = None,
 ) -> ChatMessage:
     """Persists the user's message, runs the tool-calling turn (either the
     legacy bounded manual loop or the Deep Agents runtime, depending on
@@ -1413,9 +1477,28 @@ async def run_chat_turn(
     # PendingRollbackError itself, masking the original error entirely.
     project_id = project.id
 
+    attachments: list[ChatAttachment] = []
+    if attachment_ids:
+        # The router has already checked these belong to this session, are
+        # unsent, and are done processing.
+        attachments = (
+            db.query(ChatAttachment)
+            .filter(ChatAttachment.id.in_(attachment_ids), ChatAttachment.session_id == session.id)
+            .filter(ChatAttachment.deleted_at.is_(None))
+            .all()
+        )
+    # Stands in for the user's text when a message is only files, so title
+    # derivation and single-tool-intent detection still have something to read.
+    intent_text = user_content.strip() or (
+        "Sent file(s): " + ", ".join(a.filename for a in attachments)
+    )
+
     user_message = ChatMessage(role="user", content=user_content, status="complete")
     session.messages.append(user_message)
-    maybe_set_title(session, user_content)
+    maybe_set_title(session, intent_text)
+    db.flush()
+    for attachment in attachments:
+        attachment.message_id = user_message.id
     db.commit()
 
     assistant_message = ChatMessage(role="assistant", content="", status="pending")
@@ -1427,7 +1510,7 @@ async def run_chat_turn(
     tool_by_name = {t.name: t for t in tools}
 
     restricted = await detect_single_tool_intent(
-        user_content,
+        intent_text,
         {name: t.description for name, t in tool_by_name.items()},
         google_api_key=settings.google_api_key,
         cheap_model=settings.cheap_model,
@@ -1443,6 +1526,11 @@ async def run_chat_turn(
             latest_study = db.query(StudyResult).filter_by(id=latest_study_id).one_or_none()
             if latest_study is not None:
                 system_prompt += _study_context_block(latest_study)
+
+    session_attachments = [
+        a for m in session.messages if m.role == "user" and m.deleted_at is None for a in m.attachments
+    ]
+    await ensure_gemini_files(db, session_attachments)
 
     history: list = [SystemMessage(content=system_prompt)]
     history.extend(_load_history_messages(session))

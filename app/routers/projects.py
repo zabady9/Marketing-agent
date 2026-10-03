@@ -11,7 +11,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.config import get_settings
 from app.db import SessionLocal, get_db
-from app.models import Artifact, StudyResult
+from app.models import Artifact, ChatAttachment, StudyResult
 from app.schemas.chat import ChatMessageCreate, ChatMessageResponse, ChatSessionResponse
 from app.schemas.export import ChatExportRequest
 from app.schemas.project import (
@@ -246,6 +246,33 @@ async def export_chat_markdown_endpoint(
     return PlainTextResponse(markdown, media_type="text/markdown")
 
 
+def _check_attachments_sendable(
+    db: Session, project_id: str, session_id: str, attachment_ids: list[str]
+) -> None:
+    """Every id must be an unsent attachment of this very session that has
+    finished processing ("failed" is sendable too — the agent then sees its
+    metadata only)."""
+    found = (
+        db.query(ChatAttachment)
+        .filter(
+            ChatAttachment.id.in_(attachment_ids),
+            ChatAttachment.project_id == project_id,
+            ChatAttachment.session_id == session_id,
+            ChatAttachment.deleted_at.is_(None),
+        )
+        .all()
+    )
+    if len(found) != len(set(attachment_ids)):
+        raise HTTPException(status_code=404, detail="Attachment not found")
+    for attachment in found:
+        if attachment.message_id is not None:
+            raise HTTPException(status_code=409, detail=f"{attachment.filename} was already sent.")
+        if attachment.status not in ("ready", "failed"):
+            raise HTTPException(
+                status_code=409, detail=f"{attachment.filename} is still uploading or processing."
+            )
+
+
 @router.post("/{project_id}/chat/sessions/{session_id}/messages")
 async def post_chat_message_endpoint(
     project_id: str, session_id: str, payload: ChatMessageCreate, db: Session = Depends(get_db)
@@ -264,6 +291,9 @@ async def post_chat_message_endpoint(
             status_code=409,
             detail="A response is already being generated for this session.",
         )
+
+    if payload.attachment_ids:
+        _check_attachments_sendable(db, project_id, session_id, payload.attachment_ids)
 
     queue = EventQueue()
 
@@ -295,7 +325,10 @@ async def post_chat_message_endpoint(
                     },
                 )
                 return
-            await run_chat_turn(task_db, task_project, task_session, payload.content, queue)
+            await run_chat_turn(
+                task_db, task_project, task_session, payload.content, queue,
+                attachment_ids=payload.attachment_ids,
+            )
         except Exception:
             # run_chat_turn persists its own errors onto the assistant row it
             # created — this is only a last-resort net for failures before

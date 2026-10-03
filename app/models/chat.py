@@ -97,3 +97,11 @@ class ChatMessage(Base):
     # Read-only lookup for ChatMessageResponse's artifact_data field — no
     # back_populates, since Artifact doesn't need a reverse collection.
     artifact: Mapped["Artifact | None"] = relationship(viewonly=True)
+    # Files the user sent with this message (role == "user" only). viewonly:
+    # attachments are linked by setting ChatAttachment.message_id directly
+    # (see app.services.chat_agent.run_chat_turn), never through this list.
+    attachments: Mapped[list["ChatAttachment"]] = relationship(
+        viewonly=True,
+        primaryjoin="and_(ChatAttachment.message_id == ChatMessage.id, ChatAttachment.deleted_at.is_(None))",
+        order_by="ChatAttachment.created_at",
+    )

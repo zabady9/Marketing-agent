@@ -2,14 +2,24 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.schemas.artifact import ArtifactSummary
+from app.schemas.attachment import AttachmentSummary
 from app.schemas.chart import ChartSpec
 
 
 class ChatMessageCreate(BaseModel):
-    content: str = Field(..., min_length=1)
+    content: str = ""
+    # ChatAttachment ids, uploaded and processed beforehand through the
+    # .../attachments routes. A message may be attachments alone.
+    attachment_ids: list[str] = Field(default_factory=list, max_length=20)
+
+    @model_validator(mode="after")
+    def _require_content_or_attachments(self) -> "ChatMessageCreate":
+        if not self.content.strip() and not self.attachment_ids:
+            raise ValueError("A message needs text or at least one attachment.")
+        return self
 
 
 class ChatMessageResponse(BaseModel):
@@ -26,6 +36,7 @@ class ChatMessageResponse(BaseModel):
     # event and doesn't survive a GET .../messages reload.
     chart_data: ChartSpec | None = None
     artifact_data: ArtifactSummary | None = Field(None, validation_alias="artifact")
+    attachments: list[AttachmentSummary] = Field(default_factory=list)
     status: str
     created_at: datetime
     deleted_at: datetime | None

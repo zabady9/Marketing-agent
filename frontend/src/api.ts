@@ -1,11 +1,13 @@
 import type {
   ArtifactSummary,
+  AttachmentSummary,
   BusinessProfile,
   ChatMessageRecord,
   ChatSessionRecord,
   MemoryEntry,
   ProjectSummary,
   StudyResultResponse,
+  UploadTarget,
 } from './types'
 
 const BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8007'
@@ -114,6 +116,101 @@ export async function downloadChatArtifact(projectId: string, artifact: Artifact
     throw new Error(await errorMessageFor(res))
   }
   return res.blob()
+}
+
+function attachmentsUrl(projectId: string, sessionId: string): string {
+  return `${BASE}/api/projects/${projectId}/chat/sessions/${sessionId}/attachments`
+}
+
+// Step 1 of an upload: registers the file and returns where to PUT its
+// bytes. Files go straight to storage (GCS in production), never through
+// the backend's request body — see app/routers/attachments.py.
+export async function createAttachment(
+  projectId: string,
+  sessionId: string,
+  file: File,
+): Promise<{ attachment: AttachmentSummary; upload: UploadTarget }> {
+  const res = await fetch(attachmentsUrl(projectId, sessionId), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      filename: file.name,
+      content_type: file.type,
+      size_bytes: file.size,
+    }),
+  })
+  if (!res.ok) {
+    throw new Error(await errorMessageFor(res))
+  }
+  return res.json()
+}
+
+// Step 2: XMLHttpRequest rather than fetch, since fetch has no upload
+// progress events (and these files can be up to 2 GB).
+export function uploadToTarget(
+  target: UploadTarget,
+  file: File,
+  onProgress: (fraction: number) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open(target.method, target.url)
+    Object.entries(target.headers).forEach(([k, v]) => xhr.setRequestHeader(k, v))
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress(e.loaded / e.total)
+    }
+    xhr.onload = () =>
+      xhr.status >= 200 && xhr.status < 300
+        ? resolve()
+        : reject(new Error(`Upload failed (HTTP ${xhr.status}).`))
+    xhr.onerror = () => reject(new Error('Upload failed — check your connection.'))
+    xhr.onabort = () => reject(new DOMException('Upload cancelled', 'AbortError'))
+    signal?.addEventListener('abort', () => xhr.abort())
+    xhr.send(file)
+  })
+}
+
+// Step 3: tells the backend the bytes are in place; processing (text
+// extraction / Gemini upload) then runs in the background — poll
+// getAttachment until status is "ready" or "failed".
+export async function completeAttachment(
+  projectId: string,
+  sessionId: string,
+  attachmentId: string,
+): Promise<AttachmentSummary> {
+  const res = await fetch(`${attachmentsUrl(projectId, sessionId)}/${attachmentId}/complete`, {
+    method: 'POST',
+  })
+  if (!res.ok) {
+    throw new Error(await errorMessageFor(res))
+  }
+  return res.json()
+}
+
+export async function getAttachment(
+  projectId: string,
+  sessionId: string,
+  attachmentId: string,
+): Promise<AttachmentSummary> {
+  const res = await fetch(`${attachmentsUrl(projectId, sessionId)}/${attachmentId}`)
+  if (!res.ok) {
+    throw new Error(await errorMessageFor(res))
+  }
+  return res.json()
+}
+
+export async function deleteAttachment(
+  projectId: string,
+  sessionId: string,
+  attachmentId: string,
+): Promise<void> {
+  const res = await fetch(`${attachmentsUrl(projectId, sessionId)}/${attachmentId}`, {
+    method: 'DELETE',
+  })
+  if (!res.ok && res.status !== 404) {
+    throw new Error(await errorMessageFor(res))
+  }
 }
 
 export async function createProject(): Promise<string> {
@@ -262,20 +359,24 @@ export async function* streamChatMessage(
   projectId: string,
   sessionId: string,
   content: string,
+  attachmentIds: string[] = [],
 ): AsyncGenerator<ChatSSEEvent> {
   const res = await fetch(
     `${BASE}/api/projects/${projectId}/chat/sessions/${sessionId}/messages`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({ content, attachment_ids: attachmentIds }),
     },
   )
-  if (res.status === 409) {
-    throw new GenerationInProgressError(await errorMessageFor(res))
-  }
   if (!res.ok) {
-    throw new Error(await errorMessageFor(res))
+    const message = await errorMessageFor(res)
+    // A 409 can also mean an attachment isn't sendable (still processing /
+    // already sent) — only the in-flight-generation one triggers resume.
+    if (res.status === 409 && message.includes('already being generated')) {
+      throw new GenerationInProgressError(message)
+    }
+    throw new Error(message)
   }
   yield* consumeSSEStream(res)
 }

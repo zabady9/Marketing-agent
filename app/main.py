@@ -10,6 +10,7 @@ from app.config import get_settings
 from app.db import SessionLocal
 from app.models import ChatMessage
 from app.routers.admin import router as admin_router
+from app.routers.attachments import router as attachments_router
 from app.routers.memory import router as memory_router
 from app.routers.projects import router as projects_router
 
@@ -86,6 +87,7 @@ app.add_middleware(
 )
 
 app.include_router(projects_router, prefix="/api")
+app.include_router(attachments_router, prefix="/api")
 app.include_router(memory_router, prefix="/api")
 app.include_router(admin_router, prefix="/api")
 

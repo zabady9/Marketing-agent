@@ -22,6 +22,12 @@ dependencies = [
     "psycopg[binary]>=3.2.0",
     "deepagents>=0.7.14",
     "langchain-mcp-adapters>=0.3.2",
+    "google-cloud-storage>=3.16.0",
+    "google-genai>=2.23.0",
+    "python-docx>=1.2.0",
+    "openpyxl>=3.1.5",
+    "python-pptx>=1.0.2",
+    "filetype>=1.2.0",
 ]
 
 [project.optional-dependencies]

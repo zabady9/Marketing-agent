@@ -92,6 +92,30 @@ export interface ArtifactSummary {
   size_bytes: number
 }
 
+// Matches app/schemas/attachment.py::AttachmentSummary — a user-uploaded
+// chat file. `kind` says how the agent sees it: as the file itself
+// (gemini_file), as extracted text, or by name/type only (metadata_only).
+export type AttachmentStatus = 'pending_upload' | 'processing' | 'ready' | 'failed'
+
+export interface AttachmentSummary {
+  id: string
+  filename: string
+  content_type: string
+  size_bytes: number
+  status: AttachmentStatus
+  kind: 'gemini_file' | 'text' | 'metadata_only' | null
+  error: string | null
+  created_at: string
+}
+
+// Where the browser PUTs an attachment's bytes — a GCS signed URL in
+// production, the backend's own .../content route locally.
+export interface UploadTarget {
+  url: string
+  method: string
+  headers: Record<string, string>
+}
+
 export interface ChatMessageRecord {
   id: string
   role: ChatRole
@@ -108,6 +132,8 @@ export interface ChatMessageRecord {
   // generate_pdf_report_tool/revise_artifact_tool call — see
   // app/models/chat.py::ChatMessage.artifact_id.
   artifact_data: ArtifactSummary | null
+  // Files the user sent with this message (user rows only).
+  attachments: AttachmentSummary[]
 }
 
 export interface ChatSessionRecord {

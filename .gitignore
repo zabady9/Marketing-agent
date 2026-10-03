@@ -80,3 +80,6 @@ Thumbs.db
 
 # Local SQLite database
 *.db
+
+# User chat attachments (local upload_storage mode)
+uploads/

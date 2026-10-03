@@ -63,6 +63,18 @@ class Settings(BaseSettings):
     # off disk. See docker-compose.yml.
     mcp_shared_output_dir: str = "/shared_artifacts"
 
+    # User file attachments in chat. "local" streams uploads through this
+    # backend onto upload_local_dir (dev); "gcs" has the browser PUT straight
+    # to upload_bucket via a signed URL (production — Cloud Run caps request
+    # bodies at 32MB, far below max_upload_bytes).
+    upload_storage: str = "local"
+    upload_bucket: str = "marketing-agent-uploads"
+    upload_local_dir: str = "./uploads"
+    max_upload_bytes: int = 2 * 1024**3
+    # Cap on text pulled out of DOCX/XLSX/PPTX/CSV/code attachments before
+    # it's replayed into every later turn's prompt.
+    max_extracted_chars: int = 200_000
+
     @property
     def allowed_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.allowed_origins.split(",") if origin.strip()]
