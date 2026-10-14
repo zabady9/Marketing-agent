@@ -1,25 +1,21 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
   createChatSession,
   GenerationInProgressError,
-  getStudyById,
   listChatMessages,
   listChatSessions,
+  listStudies,
   resumeChatMessageStream,
   streamChatMessage,
 } from '../api'
 import type { ChatSSEEvent } from '../api'
-import { SectionCardShell, Stat } from '../components/report/primitives'
-import { GlossaryProvider } from '../components/report/GlossaryContext'
-import { RiskMatrix } from '../components/report/RiskMatrix'
-import { TamSamSomChart } from '../components/report/charts/TamSamSomChart'
-import { CompetitorPositionChart } from '../components/report/charts/CompetitorPositionChart'
-import { SensitivityCharts } from '../components/report/charts/SensitivityCharts'
-import { CashFlowChart } from '../components/report/charts/CashFlowChart'
-import { ConfidenceMeter } from '../components/report/charts/ConfidenceMeter'
+import { SectionCardShell } from '../components/report/primitives'
 import { GenericChart } from '../components/report/charts/GenericChart'
 import { ArtifactCard } from '../components/report/ArtifactCard'
+import { AnalysisCard } from '../components/chat/AnalysisCard'
+import { Markdown } from '../components/report/blocks/Markdown'
+import { ChatSidebar } from '../components/chat/ChatSidebar'
 import {
   PendingAttachmentChips,
   SentAttachmentChips,
@@ -37,12 +33,7 @@ import type {
   ChatSessionRecord,
   ChatToolErrorPayload,
   ChartSpec,
-  CompetitiveLandscapeData,
-  ExecutiveSummaryData,
-  FinancialFeasibilityData,
-  MarketOverviewData,
-  RiskAssessmentData,
-  SectionStore,
+  StudyResultResponse,
 } from '../types'
 
 type TranscriptItem =
@@ -56,18 +47,43 @@ type TranscriptItem =
       attachments?: AttachmentSummary[]
     }
   | { kind: 'tool_error'; toolName: string; error: string }
-  | { kind: 'section'; section: string; data: unknown; studyId?: string }
+  // One card per analysis run — keyed (and de-duplicated) by study id.
+  | { kind: 'analysis'; studyId: string }
   | { kind: 'chart'; chart: ChartSpec; messageId: string }
   | { kind: 'artifact'; artifact: ArtifactSummary; messageId: string }
 
+// The assistant's reply row is created when its turn starts, so in stored
+// order it comes BEFORE the tool rows of that turn. Live, the reply streams in
+// after the tools (cards) — reorder each turn so a reload looks the same.
+function inTurnOrder(messages: ChatMessageRecord[]): ChatMessageRecord[] {
+  const out: ChatMessageRecord[] = []
+  let replies: ChatMessageRecord[] = []
+  for (const m of messages) {
+    if (m.role === 'user') {
+      out.push(...replies)
+      replies = []
+      out.push(m)
+    } else if (m.role === 'assistant') {
+      replies.push(m)
+    } else {
+      out.push(m)
+    }
+  }
+  return [...out, ...replies]
+}
+
 function historyToTranscript(messages: ChatMessageRecord[]): TranscriptItem[] {
-  // Every successful study run now has its own permanent, independently
-  // viewable StudyResult row, so every one gets its own report-link card —
-  // each correctly linked to the specific run it came from via study_id.
-  // This placeholder card is later upgraded in place to the full set of rich
-  // section cards once its StudyResult loads — see expandStudySections below.
   const items: TranscriptItem[] = []
-  messages.forEach((m) => {
+  const seenStudies = new Set<string>()
+  inTurnOrder(messages).forEach((m) => {
+    if (m.role === 'tool' && m.study_id) {
+      // The analysis card replaces the raw tool line, and appears once per run.
+      if (!seenStudies.has(m.study_id)) {
+        seenStudies.add(m.study_id)
+        items.push({ kind: 'analysis', studyId: m.study_id })
+      }
+      return
+    }
     items.push({
       kind: 'message',
       id: m.id,
@@ -76,12 +92,6 @@ function historyToTranscript(messages: ChatMessageRecord[]): TranscriptItem[] {
       toolName: m.tool_name,
       attachments: m.attachments,
     })
-    // Any successful study-producing tool call (the full study, or one of
-    // the single-capability tools) gets a placeholder, upgraded in place to
-    // real section card(s) below — not just run_feasibility_study_tool.
-    if (m.role === 'tool' && m.study_id) {
-      items.push({ kind: 'section', section: 'report_link', data: null, studyId: m.study_id })
-    }
     if (m.role === 'tool' && m.tool_name === 'generate_chart_tool' && m.chart_data) {
       items.push({ kind: 'chart', chart: m.chart_data, messageId: m.id })
     }
@@ -92,193 +102,11 @@ function historyToTranscript(messages: ChatMessageRecord[]): TranscriptItem[] {
   return items
 }
 
-// Reconstructs the same `kind: 'section'` transcript items the live
-// section_ready SSE handler produces, from a persisted StudyResult — so
-// reload renders byte-identical cards to what streamed in live. Each
-// SectionStore entry is a `{language, review_recommended?, data}` envelope
-// (see ParsedSection<T> in types.ts); only `.data` is ever rendered, mirroring
-// the live handler which also stores `payload.data`, not the whole envelope.
-function expandStudySections(studyId: string, sections: SectionStore): TranscriptItem[] {
-  return Object.entries(sections)
-    .filter((entry): entry is [string, { data: unknown }] => entry[1] !== undefined)
-    .map(([section, envelope]) => ({
-      kind: 'section' as const,
-      section,
-      data: envelope.data,
-      studyId,
-    }))
-}
-
-function fmt(n: number | null | undefined): string {
-  if (n === null || n === undefined) return '—'
-  return n.toLocaleString(undefined, { maximumFractionDigits: 1 })
-}
-
-function ViewFullReportLink({ projectId, studyId }: { projectId?: string; studyId?: string }) {
-  if (!projectId || !studyId) return null
-  return (
-    <Link
-      to={`/projects/${projectId}/studies/${studyId}`}
-      className="mt-2 inline-block text-xs font-medium text-indigo-600 hover:text-indigo-700 hover:underline"
-    >
-      View full report →
-    </Link>
-  )
-}
-
-function SectionCard({
-  section,
-  data,
-  projectId,
-  studyId,
-}: {
-  section: string
-  data: unknown
-  projectId?: string
-  studyId?: string
-}) {
-  if (section === 'market_overview') {
-    const d = data as MarketOverviewData
-    return (
-      <SectionCardShell title="Market Overview">
-        <TamSamSomChart tam={d.tam} sam={d.sam} som={d.som} growthRateCagr={d.growth_rate_cagr} compact />
-        {d.narrative?.text && <p className="mt-3 text-xs text-gray-600">{d.narrative.text}</p>}
-        <ViewFullReportLink projectId={projectId} studyId={studyId} />
-      </SectionCardShell>
-    )
-  }
-
-  if (section === 'competitive_landscape') {
-    const d = data as CompetitiveLandscapeData
-    return (
-      <SectionCardShell title="Competitive Landscape">
-        <p className="text-xs text-gray-600">
-          {d.competitors.length} competitor{d.competitors.length === 1 ? '' : 's'} analyzed
-          {d.competitors.length > 0 && ': ' + d.competitors.map((c) => c.name).join(', ')}
-        </p>
-        {d.competitors.length > 0 && (
-          <div className="mt-2">
-            <CompetitorPositionChart competitors={d.competitors} compact />
-          </div>
-        )}
-        {d.key_differentiators.length > 0 && (
-          <ul className="mt-2 list-disc list-inside text-xs text-gray-600 space-y-0.5">
-            {d.key_differentiators.slice(0, 3).map((diff, i) => (
-              <li key={i}>{diff}</li>
-            ))}
-          </ul>
-        )}
-        <ViewFullReportLink projectId={projectId} studyId={studyId} />
-      </SectionCardShell>
-    )
-  }
-
-  if (section === 'financial_feasibility') {
-    const d = data as FinancialFeasibilityData
-    const currency = d.capex.currency || d.opex_monthly.currency || 'USD'
-    return (
-      <SectionCardShell title="Financial Feasibility">
-        <div className="grid grid-cols-3 gap-3 text-center">
-          <Stat label="Break-even" term="Break-even" value={fmt(d.break_even_months.value)} unit="months" />
-          <Stat label="ROI Year 1" term="ROI" value={fmt(d.roi_year_1.value)} unit="%" />
-          <Stat
-            label="NPV"
-            term="NPV"
-            value={fmt(d.npv.value)}
-            unit={d.npv.is_positive ? 'positive' : 'negative'}
-          />
-        </div>
-        <div className="mt-2">
-          <SensitivityCharts scenarios={d.sensitivity_analysis.value} currency={currency} compact />
-        </div>
-        <div className="mt-2">
-          <CashFlowChart cashFlow={d.cash_flow} currency={currency} compact />
-        </div>
-        <ViewFullReportLink projectId={projectId} studyId={studyId} />
-      </SectionCardShell>
-    )
-  }
-
-  if (section === 'risk_assessment') {
-    const d = data as RiskAssessmentData
-    return (
-      <SectionCardShell title="Risk Assessment">
-        <p className="text-xs text-gray-600">
-          {d.high_critical_count} high/critical risk{d.high_critical_count === 1 ? '' : 's'}{' '}
-          identified out of {d.risks.length} total.
-        </p>
-        {d.risks.length > 0 && (
-          <div className="mt-2">
-            <RiskMatrix risks={d.risks} compact />
-          </div>
-        )}
-        {d.risks.length > 0 && (
-          <ul className="mt-2 list-disc list-inside text-xs text-gray-600 space-y-0.5">
-            {d.risks.slice(0, 3).map((r, i) => (
-              <li key={i}>{r.risk_description}</li>
-            ))}
-          </ul>
-        )}
-        <ViewFullReportLink projectId={projectId} studyId={studyId} />
-      </SectionCardShell>
-    )
-  }
-
-  if (section === 'executive_summary') {
-    const d = data as ExecutiveSummaryData
-    return (
-      <SectionCardShell title="Executive Summary">
-        <p className="text-sm font-semibold text-gray-900">
-          Verdict: <span className="uppercase">{d.verdict.replace(/_/g, ' ')}</span>
-        </p>
-        <div className="mt-1">
-          <ConfidenceMeter confidenceScore={d.confidence_score} breakdown={d.confidence_breakdown} compact />
-        </div>
-        {d.key_opportunities.length > 0 && (
-          <div className="mt-2">
-            <p className="text-xs font-medium text-gray-500">Opportunities</p>
-            <ul className="list-disc list-inside text-xs text-gray-600 space-y-0.5">
-              {d.key_opportunities.slice(0, 2).map((o, i) => (
-                <li key={i}>{o}</li>
-              ))}
-            </ul>
-          </div>
-        )}
-        {d.key_risks.length > 0 && (
-          <div className="mt-2">
-            <p className="text-xs font-medium text-gray-500">Risks</p>
-            <ul className="list-disc list-inside text-xs text-gray-600 space-y-0.5">
-              {d.key_risks.slice(0, 2).map((r, i) => (
-                <li key={i}>{r}</li>
-              ))}
-            </ul>
-          </div>
-        )}
-        <ViewFullReportLink projectId={projectId} studyId={studyId} />
-      </SectionCardShell>
-    )
-  }
-
-  if (section === 'report_link') {
-    // Brief fallback shown only until expandStudySections upgrades this into
-    // the real section card(s) (or if that fetch fails) — covers both a full
-    // study and a single-capability result, hence the generic wording.
-    return (
-      <SectionCardShell title="Result">
-        <p className="text-xs text-gray-600">Loading result…</p>
-        <ViewFullReportLink projectId={projectId} studyId={studyId} />
-      </SectionCardShell>
-    )
-  }
-
-  return null
-}
-
 function MessageBubble({ item }: { item: TranscriptItem & { kind: 'message' } }) {
   if (item.role === 'user') {
     return (
       <div className="flex justify-end">
-        <div className="max-w-md rounded-lg bg-indigo-600 text-white px-4 py-2.5 text-sm whitespace-pre-wrap">
+        <div dir="auto" className="max-w-md rounded-lg bg-indigo-600 text-white px-4 py-2.5 text-sm whitespace-pre-wrap">
           {item.attachments && <SentAttachmentChips attachments={item.attachments} />}
           {item.content}
         </div>
@@ -296,8 +124,8 @@ function MessageBubble({ item }: { item: TranscriptItem & { kind: 'message' } })
   }
   return (
     <div className="flex justify-start">
-      <div className="max-w-md rounded-lg bg-white border border-gray-200 px-4 py-2.5 text-sm text-gray-900 whitespace-pre-wrap">
-        {item.content}
+      <div dir="auto" className="max-w-xl rounded-lg bg-white border border-gray-200 px-4 py-2.5 text-sm text-gray-900">
+        <Markdown text={item.content} />
       </div>
     </div>
   )
@@ -317,6 +145,8 @@ export function ChatPage() {
   const { projectId, sessionId } = useParams<{ projectId: string; sessionId: string }>()
   const navigate = useNavigate()
   const [sessions, setSessions] = useState<ChatSessionRecord[]>([])
+  const [studies, setStudies] = useState<StudyResultResponse[]>([])
+  const [sidebarOpen, setSidebarOpen] = useState(false)
   const [transcript, setTranscript] = useState<TranscriptItem[]>([])
   const [loadingHistory, setLoadingHistory] = useState(true)
   const [historyError, setHistoryError] = useState<string | null>(null)
@@ -330,24 +160,19 @@ export function ChatPage() {
   const attachments = usePendingAttachments(projectId, sessionId)
   const canSend =
     !isSending && !attachments.busy && (input.trim().length > 0 || attachments.sendable.length > 0)
-  // Tracks the in-flight run's study id so live section_ready cards can be
-  // stamped with it as they arrive — set once at push-time, not read
-  // reactively later, so each card stays correctly attributed even if a
-  // second run starts before reload.
-  const activeStudyIdRef = useRef<string | undefined>(undefined)
+  // Per-run counter bumped on every live analysis event, so that run's card
+  // refreshes immediately (cards also poll on their own while running).
+  const [analysisBumps, setAnalysisBumps] = useState<Record<string, number>>({})
+  // The stream belonging to the session on screen; aborted when the user
+  // switches chats so one chat's events can never land in another.
+  const streamAbortRef = useRef<AbortController | null>(null)
 
-  // The "glossary" section_ready event (localized TAM/SAM/ROI/... definitions)
-  // isn't rendered as its own card — SectionCard has no branch for it — it's
-  // only consumed here to feed JargonTerm tooltips on the other cards.
-  const glossaryTerms = useMemo(() => {
-    for (let i = transcript.length - 1; i >= 0; i--) {
-      const item = transcript[i]
-      if (item.kind === 'section' && item.section === 'glossary') {
-        return (item.data as { terms: Record<string, string> }).terms
-      }
+  useEffect(() => {
+    return () => {
+      streamAbortRef.current?.abort()
+      streamAbortRef.current = null
     }
-    return undefined
-  }, [transcript])
+  }, [sessionId])
 
   useEffect(() => {
     if (!projectId) return
@@ -361,10 +186,21 @@ export function ChatPage() {
         // Sidebar is a convenience — a failed fetch here shouldn't block the
         // main transcript from loading, so errors are swallowed.
       })
+    listStudies(projectId)
+      .then((data) => {
+        if (cancelled) return
+        setStudies(data)
+      })
+      .catch(() => {})
     return () => {
       cancelled = true
     }
   }, [projectId])
+
+  function refreshStudies() {
+    if (!projectId) return
+    listStudies(projectId).then(setStudies).catch(() => {})
+  }
 
   useEffect(() => {
     if (!projectId || !sessionId) return
@@ -390,40 +226,6 @@ export function ChatPage() {
         ) {
           attachToActiveGeneration(lastMessage)
         }
-
-        // Upgrade each report_link placeholder to the full set of rich
-        // section cards once its StudyResult loads. Runs after the initial
-        // paint so chat text renders immediately regardless of how many
-        // studies this session has; a failed fetch (e.g. deleted study)
-        // just leaves that placeholder in place — no regression.
-        const studyIds = [
-          ...new Set(
-            messages
-              .filter(
-                (m): m is ChatMessageRecord & { study_id: string } =>
-                  m.role === 'tool' && !!m.study_id,
-              )
-              .map((m) => m.study_id),
-          ),
-        ]
-        studyIds.forEach((studyId) => {
-          getStudyById(projectId, studyId)
-            .then((study) => {
-              if (cancelled) return
-              const expanded = expandStudySections(studyId, study.sections)
-              if (expanded.length === 0) return
-              setTranscript((prev) =>
-                prev.flatMap((item) =>
-                  item.kind === 'section' && item.section === 'report_link' && item.studyId === studyId
-                    ? expanded
-                    : [item],
-                ),
-              )
-            })
-            .catch(() => {
-              // Leave the report_link fallback card in place.
-            })
-        })
       })
       .catch((err) => {
         if (cancelled) return
@@ -459,20 +261,21 @@ export function ChatPage() {
           { kind: 'tool_error', toolName: payload.tool_name, error: payload.error },
         ])
       } else if (evt.event === 'study_started') {
-        const payload = evt.data as { study_id: string }
-        activeStudyIdRef.current = payload.study_id
-      } else if (evt.event === 'section_ready') {
-        const payload = evt.data as { section: string; data: unknown }
-        setTranscript((prev) => [
-          ...prev,
-          {
-            kind: 'section',
-            section: payload.section,
-            data: payload.data,
-            studyId: activeStudyIdRef.current,
-          },
-        ])
-        setProgressLabel(null)
+        const { study_id } = evt.data as { study_id: string }
+        setTranscript((prev) =>
+          prev.some((item) => item.kind === 'analysis' && item.studyId === study_id)
+            ? prev
+            : [...prev, { kind: 'analysis', studyId: study_id }],
+        )
+        refreshStudies()
+      } else if (
+        evt.event === 'analysis_plan_ready' ||
+        evt.event === 'analysis_step_completed' ||
+        evt.event === 'study_completed'
+      ) {
+        const { study_id } = evt.data as { study_id: string }
+        setAnalysisBumps((prev) => ({ ...prev, [study_id]: (prev[study_id] ?? 0) + 1 }))
+        if (evt.event === 'study_completed') refreshStudies()
       } else if (evt.event === 'chat_chart_ready') {
         const payload = evt.data as ChatChartReadyPayload
         setTranscript((prev) => [
@@ -520,12 +323,6 @@ export function ChatPage() {
           return [...prev, finalMessage]
         })
         setProgressLabel(null)
-      } else if (evt.event === 'agent_started') {
-        const payload = evt.data as { agent: string }
-        setProgressLabel(`Running ${payload.agent}…`)
-      } else if (evt.event === 'agent_completed') {
-        const payload = evt.data as { agent: string }
-        setProgressLabel(`${payload.agent} completed`)
       }
     }
   }
@@ -548,15 +345,21 @@ export function ChatPage() {
       ]
     })
     setIsSending(true)
+    const controller = new AbortController()
+    streamAbortRef.current = controller
     try {
       await consumeChatEvents(
-        resumeChatMessageStream(projectId, sessionId, active.id, active.content.length),
+        resumeChatMessageStream(projectId, sessionId, active.id, active.content.length, controller.signal),
       )
     } catch (err) {
+      if (controller.signal.aborted) return
       setSendError(err instanceof Error ? err.message : 'Failed to resume the in-progress reply.')
     } finally {
-      setIsSending(false)
-      setProgressLabel(null)
+      if (!controller.signal.aborted) {
+        setIsSending(false)
+        setProgressLabel(null)
+        refreshStudies()
+      }
     }
   }
 
@@ -573,6 +376,8 @@ export function ChatPage() {
       { kind: 'message', id: localId, role: 'user', content, attachments: sent },
     ])
     setIsSending(true)
+    const controller = new AbortController()
+    streamAbortRef.current = controller
 
     try {
       const stream = streamChatMessage(
@@ -580,6 +385,7 @@ export function ChatPage() {
         sessionId,
         content,
         sent.map((a) => a.id),
+        controller.signal,
       )
       // The request (and its 409/404 checks) only goes out on the first
       // next() — clear the chips once it's accepted, not before.
@@ -592,6 +398,9 @@ export function ChatPage() {
         })(),
       )
     } catch (err) {
+      // Switched to another chat: the generation keeps running server-side and
+      // reappears (with its analysis cards) when the user comes back.
+      if (controller.signal.aborted) return
       if (err instanceof GenerationInProgressError) {
         // The backend never accepted this turn — drop the optimistic bubble
         // and give the input back so the user can resend once the
@@ -613,8 +422,11 @@ export function ChatPage() {
         setSendError(err instanceof Error ? err.message : 'Failed to send message.')
       }
     } finally {
-      setIsSending(false)
-      setProgressLabel(null)
+      if (!controller.signal.aborted) {
+        setIsSending(false)
+        setProgressLabel(null)
+        refreshStudies()
+      }
       if (wasFirstMessage && projectId) {
         listChatSessions(projectId).then(setSessions).catch(() => {})
       }
@@ -624,12 +436,22 @@ export function ChatPage() {
   return (
     <div className="h-screen bg-gray-50 flex flex-col overflow-hidden">
       <div className="shrink-0 border-b border-gray-200 bg-white px-4 py-3 flex items-center justify-between">
-        <Link
-          to={`/projects/${projectId}`}
-          className="text-sm text-gray-500 hover:text-gray-700"
-        >
-          ← Business profile
-        </Link>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setSidebarOpen(true)}
+            aria-label="Open chats and studies"
+            className="sm:hidden rounded-md border border-gray-300 px-2 py-1 text-sm text-gray-600 hover:bg-gray-50"
+          >
+            ☰
+          </button>
+          <Link
+            to={`/projects/${projectId}`}
+            className="text-sm text-gray-500 hover:text-gray-700"
+          >
+            ← Business profile
+          </Link>
+        </div>
         <p className="text-sm font-medium text-gray-700">Chat</p>
         <Link to="/memory" className="text-sm text-gray-500 hover:text-gray-700">
           Manage memory
@@ -637,31 +459,15 @@ export function ChatPage() {
       </div>
 
       <div className="flex-1 min-h-0 flex overflow-hidden">
-        <aside className="w-56 shrink-0 border-r border-gray-200 bg-white overflow-y-auto px-3 py-4 hidden sm:block">
-          <button
-            onClick={handleNewChat}
-            className="w-full mb-3 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-700 transition-colors"
-          >
-            + New chat
-          </button>
-          <ul className="space-y-1">
-            {sessions.map((s) => (
-              <li key={s.id}>
-                <Link
-                  to={`/projects/${projectId}/chat/${s.id}`}
-                  className={`block rounded-md px-2.5 py-2 text-xs truncate transition-colors ${
-                    s.id === sessionId
-                      ? 'bg-indigo-50 border border-indigo-300 text-indigo-900'
-                      : 'border border-transparent text-gray-600 hover:bg-gray-50'
-                  }`}
-                  title={s.title ?? 'New chat'}
-                >
-                  {s.title ?? 'New chat'}
-                </Link>
-              </li>
-            ))}
-          </ul>
-        </aside>
+        <ChatSidebar
+          projectId={projectId}
+          sessionId={sessionId}
+          sessions={sessions}
+          studies={studies}
+          open={sidebarOpen}
+          onClose={() => setSidebarOpen(false)}
+          onNewChat={handleNewChat}
+        />
 
         <div
           className={`relative flex-1 min-h-0 flex flex-col overflow-hidden ${dragging ? 'ring-2 ring-inset ring-indigo-400' : ''}`}
@@ -696,44 +502,36 @@ export function ChatPage() {
               )}
               {!loadingHistory && !historyError && transcript.length === 0 && (
                 <p className="text-sm text-gray-400">
-                  No messages yet. Ask the assistant to build a feasibility study for this project.
+                  No messages yet. Ask for any analysis: a feasibility study, a SWOT, or a question like "can I compete with the big players?"
                 </p>
               )}
-              <GlossaryProvider terms={glossaryTerms}>
-                {transcript.map((item, i) => {
-                  if (item.kind === 'message') return <MessageBubble key={i} item={item} />
-                  if (item.kind === 'tool_error') {
-                    return <ToolErrorBubble key={i} toolName={item.toolName} error={item.error} />
-                  }
-                  if (item.kind === 'chart') {
-                    return (
-                      <div key={i} className="flex justify-start">
-                        <SectionCardShell title={item.chart.title}>
-                          <GenericChart chart={item.chart} compact />
-                        </SectionCardShell>
-                      </div>
-                    )
-                  }
-                  if (item.kind === 'artifact') {
-                    return (
-                      <div key={i} className="flex justify-start">
-                        <ArtifactCard projectId={projectId!} artifact={item.artifact} />
-                      </div>
-                    )
-                  }
-                  if (item.section === 'glossary') return null
+              {transcript.map((item, i) => {
+                if (item.kind === 'message') return <MessageBubble key={i} item={item} />
+                if (item.kind === 'tool_error') {
+                  return <ToolErrorBubble key={i} toolName={item.toolName} error={item.error} />
+                }
+                if (item.kind === 'chart') {
                   return (
                     <div key={i} className="flex justify-start">
-                      <SectionCard
-                        section={item.section}
-                        data={item.data}
-                        projectId={projectId}
-                        studyId={item.studyId}
-                      />
+                      <SectionCardShell title={item.chart.title}>
+                        <GenericChart chart={item.chart} compact />
+                      </SectionCardShell>
                     </div>
                   )
-                })}
-              </GlossaryProvider>
+                }
+                if (item.kind === 'artifact') {
+                  return (
+                    <div key={i} className="flex justify-start">
+                      <ArtifactCard projectId={projectId!} artifact={item.artifact} />
+                    </div>
+                  )
+                }
+                return (
+                  <div key={`analysis-${item.studyId}`} className="flex justify-start">
+                    <AnalysisCard projectId={projectId!} studyId={item.studyId} bump={analysisBumps[item.studyId] ?? 0} />
+                  </div>
+                )
+              })}
               {progressLabel && (
                 <div className="flex justify-start">
                   <div className="max-w-md rounded-lg bg-gray-50 border border-gray-200 px-3 py-1.5 text-xs text-gray-500 italic">

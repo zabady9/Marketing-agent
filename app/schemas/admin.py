@@ -33,11 +33,9 @@ class ProjectAdminResponse(ProjectDetail):
 class StudyResultAdminCreate(BaseModel):
     project_id: str
     status: str = "pending"
-    sections: dict = {}
-    verdict: str | None = None
-    confidence_score: float | None = None
-    qc_summary: dict | None = None
-    fatal_agent_failures: list[str] = []
+    title: str | None = None
+    goal: str | None = None
+    report: dict = {}
     error: str | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
@@ -48,11 +46,9 @@ class StudyResultAdminUpdate(BaseModel):
     BusinessProfileUpdate: omit a field to leave it untouched."""
 
     status: str | None = None
-    sections: dict | None = None
-    verdict: str | None = None
-    confidence_score: float | None = None
-    qc_summary: dict | None = None
-    fatal_agent_failures: list[str] | None = None
+    title: str | None = None
+    goal: str | None = None
+    report: dict | None = None
     error: str | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
@@ -73,16 +69,3 @@ class ChatMessageAdminUpdate(BaseModel):
 class MemoryEntryAdminUpdate(BaseModel):
     content: str | None = None
     source: str | None = None
-
-
-class GlossaryCacheResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    language: str
-    terms: dict[str, str]
-    created_at: datetime
-    deleted_at: datetime | None
-
-
-class GlossaryCacheAdminUpdate(BaseModel):
-    terms: dict[str, str]

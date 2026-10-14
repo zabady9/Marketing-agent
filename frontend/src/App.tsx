@@ -12,7 +12,6 @@ import { AdminStudyResultsPage } from './pages/admin/AdminStudyResultsPage'
 import { AdminChatSessionsPage } from './pages/admin/AdminChatSessionsPage'
 import { AdminChatMessagesPage } from './pages/admin/AdminChatMessagesPage'
 import { AdminMemoryEntriesPage } from './pages/admin/AdminMemoryEntriesPage'
-import { AdminGlossaryCachePage } from './pages/admin/AdminGlossaryCachePage'
 
 export function App() {
   return (
@@ -32,7 +31,6 @@ export function App() {
             <Route path="chat-sessions" element={<AdminChatSessionsPage />} />
             <Route path="chat-sessions/:sessionId/messages" element={<AdminChatMessagesPage />} />
             <Route path="memory" element={<AdminMemoryEntriesPage />} />
-            <Route path="glossary" element={<AdminGlossaryCachePage />} />
           </Route>
         </Routes>
       </BrowserRouter>

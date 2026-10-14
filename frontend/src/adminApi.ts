@@ -9,8 +9,6 @@ import type {
   ChatMessageAdminUpdate,
   ChatSessionAdminResponse,
   ChatSessionAdminUpdate,
-  GlossaryCacheAdminResponse,
-  GlossaryCacheAdminUpdate,
   MemoryEntryAdminResponse,
   MemoryEntryAdminUpdate,
   PagedResult,
@@ -138,7 +136,7 @@ export function updateAdminBusinessProfile(
 // ── StudyResult ──────────────────────────────────────────────────────────────
 
 export function listAdminStudies(
-  params?: AdminListParams & { project_id?: string; status?: string; verdict?: string },
+  params?: AdminListParams & { project_id?: string; status?: string },
 ): Promise<PagedResult<StudyResultAdminResponse>> {
   return request(`/api/admin/studies${buildQuery(params)}`)
 }
@@ -247,31 +245,4 @@ export function softDeleteAdminMemoryEntry(memoryId: string): Promise<MemoryEntr
 
 export function restoreAdminMemoryEntry(memoryId: string): Promise<MemoryEntryAdminResponse> {
   return postJson(`/api/admin/memory/${memoryId}/restore`)
-}
-
-// ── GlossaryCache (keyed by `language`, not `id`) ────────────────────────────
-
-export function listAdminGlossaryCache(
-  params?: AdminListParams,
-): Promise<PagedResult<GlossaryCacheAdminResponse>> {
-  return request(`/api/admin/glossary${buildQuery(params)}`)
-}
-
-export function getAdminGlossaryCache(language: string): Promise<GlossaryCacheAdminResponse> {
-  return request(`/api/admin/glossary/${language}`)
-}
-
-export function updateAdminGlossaryCache(
-  language: string,
-  payload: GlossaryCacheAdminUpdate,
-): Promise<GlossaryCacheAdminResponse> {
-  return patchJson(`/api/admin/glossary/${language}`, payload)
-}
-
-export function softDeleteAdminGlossaryCache(language: string): Promise<GlossaryCacheAdminResponse> {
-  return del(`/api/admin/glossary/${language}`)
-}
-
-export function restoreAdminGlossaryCache(language: string): Promise<GlossaryCacheAdminResponse> {
-  return postJson(`/api/admin/glossary/${language}/restore`)
 }

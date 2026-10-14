@@ -81,16 +81,14 @@ def get_active_generation(db: Session, session: ChatSession) -> ChatMessage | No
 
 
 def get_latest_study_id_for_session(db: Session, session: ChatSession) -> str | None:
-    """The study_id of the most recent successful run_feasibility_study_tool
-    call in this session, if any — lets the chat agent surface that study's
-    already-computed section data (competitors, financials, risks, ...) back
-    into context on later turns, instead of the model's only option being to
-    re-run the whole pipeline to answer a follow-up question."""
+    """The study_id of the most recent run_analysis_tool call in this session,
+    if any — lets the chat agent surface that analysis's results back into
+    context on later turns instead of re-running it to answer a follow-up."""
     latest = (
         db.query(ChatMessage)
         .filter(
             ChatMessage.session_id == session.id,
-            ChatMessage.tool_name == "run_feasibility_study_tool",
+            ChatMessage.tool_name == "run_analysis_tool",
             ChatMessage.study_id.isnot(None),
             ChatMessage.deleted_at.is_(None),
         )

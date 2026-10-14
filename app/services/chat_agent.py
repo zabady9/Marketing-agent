@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -14,8 +15,8 @@ from langsmith import traceable
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
-from app.agents.financial import FinancialCalcError, run_full_financial_model
 from app.agents.intake import IntakeHardBlockError
+from app.analysis.engine import run_analysis
 from app.config import get_settings
 from app.models import (
     Artifact,
@@ -45,13 +46,13 @@ from app.services.artifact_generation import (
 from app.services.artifact_generation import revise_artifact as run_artifact_revision
 from app.services.attachment_processing import ensure_gemini_files
 from app.services.chat import get_latest_study_id_for_session, maybe_set_title
-from app.services.export import build_study_markdown, synthesize_chat_export
+from app.services.export import build_report_markdown, synthesize_chat_export
 from app.services.memory import add_memory_entry, list_memory_entries
 from app.services.project import populate_business_profile, update_business_profile
-from app.services.study import run_feasibility_study, run_single_phase_study
 from app.services.tool_intent import detect_single_tool_intent
 from app.sse import EventQueue, SSEEvent
 from app.tools import web_search
+from app.tools.financial_calc import FinancialCalcError, run_full_financial_model
 
 logger = logging.getLogger(__name__)
 
@@ -205,8 +206,8 @@ def _system_prompt(project: Project, memory_entries: list[MemoryEntry]) -> str:
         else ""
     )
     return (
-        "You are a business analyst assistant helping the user develop a feasibility "
-        f"study for their project, \"{project.name}\".\n\n"
+        "You are a business analyst assistant helping the user analyse their "
+        f"business for their project, \"{project.name}\".\n\n"
         "Business profile on file:\n"
         f"- Description: {profile.business_description}\n"
         f"- Problem: {profile.problem_statement or 'unknown'}\n"
@@ -231,38 +232,30 @@ def _system_prompt(project: Project, memory_entries: list[MemoryEntry]) -> str:
         "ask them, offer a clarifying question or suggestion instead of "
         "researching it yourself, and move on rather than blocking the "
         "conversation if it stays unknown.\n\n"
-        "The feasibility study is a collection of INDEPENDENT capabilities, each "
-        "with its own dedicated tool — it is NOT one bulk operation you run by "
-        "default. Map exactly what the user names to exactly one tool:\n"
-        "  - market sizing / TAM / SAM / SOM / market opportunity -> run_market_sizing_tool\n"
-        "  - competitors / competitive landscape / competitor analysis -> run_competitive_analysis_tool\n"
-        "  - financials / costs / break-even / ROI / financial model -> run_financial_analysis_tool\n"
-        "  - risks / risk profile / risk analysis -> run_risk_analysis_tool\n"
-        "  - verdict / recommendation / executive summary -> run_synthesis_tool\n"
-        "  - the WHOLE study/report as a single unit -> run_feasibility_study_tool\n"
-        "DEFAULT RULE: if the user names ONE specific capability from the list "
-        "above, call ONLY that capability's own tool — never "
-        "run_feasibility_study_tool. Only call run_feasibility_study_tool when "
-        "the user's phrasing clearly refers to the study/report AS A WHOLE (e.g. "
-        "'run the full feasibility study', 'build the complete report', 'do the "
-        "whole analysis') or explicitly lists multiple/all capabilities "
-        "together. A message about one topic — 'run competitor analysis', "
-        "'just check the market', 'what's the risk profile', 'analyze the "
-        "competition only' — is ALWAYS a single-capability request: call that "
-        "one tool and nothing else, even though that capability happens to "
-        "also be part of the full pipeline. When genuinely unsure, prefer the "
-        "single narrower tool over the full study — it is far cheaper to run "
-        "one more tool afterward than to run everything when only one part was "
-        "wanted. Note that run_risk_analysis_tool and run_synthesis_tool still "
-        "compute their own prerequisite sections first (risk needs market "
-        "sizing + competitive analysis + financial modeling; synthesis needs "
-        "risk too) — mention that if relevant, but this does not change which "
-        "single tool to call. If study data "
+        "ANALYSES: every analysis — a feasibility study, market sizing, "
+        "competitor analysis, financials, risks, SWOT, PESTEL, Porter's Five "
+        "Forces, personas, marketing strategy, pricing, go-to-market, or a plain "
+        "question such as 'can I compete with the big players?' or 'who should I "
+        "target first?' — runs through ONE tool, run_analysis_tool. It researches "
+        "how that analysis is done, plans it as steps and carries them out with "
+        "live web data, charts, tables, boards and diagrams. Call it with a clear "
+        "`goal` (what the user wants to learn and which decision it supports, "
+        "enriched with context from this conversation); set `analysis_name` only "
+        "when the user named an analysis or framework. Never ask the user which "
+        "framework to use — choosing it is the tool's job; only ask a clarifying "
+        "question when the goal itself is unclear. For a full / comprehensive / "
+        "complete analysis (e.g. 'full analysis', 'تحليل كامل', 'not just a "
+        "feasibility study') call it ONCE with comprehensive=true and a goal "
+        "covering market, competition, customers, financials, strategy and "
+        "risks. Several different analyses requested in one message can be "
+        "separate parallel calls. After it returns, summarize the answer briefly "
+        "and point the user to the report card — don't repeat the whole report. "
+        "If analysis data "
         "is already provided below, answer follow-up questions about it (e.g. "
         "about specific competitors, financial figures, or risks) directly from "
         "that data instead of calling a tool again — only call a tool when the "
-        "user explicitly asks to run, build, refresh, or redo a capability (or "
-        "the whole study), or when no study data is available yet. Use the "
+        "user explicitly asks to run, build, refresh, or redo an analysis, or "
+        "when no relevant analysis exists yet. Use the "
         "update_business_profile tool when the user reveals new or corrected "
         "information about the business that should be saved. Use the "
         "remember_fact_tool when the user states a durable preference or fact "
@@ -295,80 +288,65 @@ def _system_prompt(project: Project, memory_entries: list[MemoryEntry]) -> str:
     )
 
 
-# Fields that matter for report generation / QC (source citations, financial
-# calculation traces, per-claim sourcing classification, raw search queries)
-# but are pure noise for the model answering a natural-language follow-up
-# question — stripped out to keep the injected study digest compact.
-_STUDY_CONTEXT_VERBOSE_KEYS = frozenset(
-    {"citations", "calculation_trace", "claim_type", "claim_types", "search_queries_used", "methodology"}
-)
-
-
-def _trim_for_context(value: object) -> object:
-    if isinstance(value, dict):
-        return {k: _trim_for_context(v) for k, v in value.items() if k not in _STUDY_CONTEXT_VERBOSE_KEYS}
-    if isinstance(value, list):
-        return [_trim_for_context(v) for v in value]
-    return value
-
-
 def _study_context_block(study: StudyResult) -> str:
-    """Compact digest of a completed study's section data, appended to the
-    system prompt so the model can answer follow-up questions (e.g. "tell me
-    about the competitors") directly from real data instead of its only
-    option being to re-run the whole pipeline — see get_latest_study_id_for_session."""
-    parts = []
-    for section_name, envelope in (study.sections or {}).items():
-        if section_name == "glossary":
-            continue  # term definitions aren't useful as Q&A context
-        data = envelope.get("data") if isinstance(envelope, dict) else None
-        if not data:
-            continue
-        parts.append(f"### {section_name}\n{json.dumps(_trim_for_context(data), ensure_ascii=False)}")
-
-    if not parts:
+    """Compact digest of the latest completed analysis, appended to the system
+    prompt so the model can answer follow-up questions from real results
+    instead of re-running the analysis — see get_latest_study_id_for_session."""
+    report = study.report or {}
+    if not report.get("steps"):
         return ""
-
-    return (
-        "\n\nData from the most recently completed feasibility study for this "
-        f"project (verdict: {study.verdict}, confidence: {study.confidence_score}):\n\n"
-        + "\n\n".join(parts)
-    )
-
-
-def _find_figure_data(data: object, needle: str) -> object | None:
-    """Walks a section's raw (untrimmed) data looking for a figure matching
-    needle — a dict key that contains it, or a list item whose name/
-    category/title-like field matches — used by explain_figure_tool, which
-    (unlike the system-prompt digest) needs the untrimmed calculation_trace/
-    citations/methodology this deliberately doesn't strip."""
-    if isinstance(data, dict):
-        for key, value in data.items():
-            if needle in key.lower().replace("_", " "):
-                return {key: value}
-        for label_key in ("name", "category", "title", "risk_description"):
-            label = data.get(label_key)
-            if isinstance(label, str) and needle in label.lower():
-                return data
-        for value in data.values():
-            found = _find_figure_data(value, needle)
-            if found is not None:
-                return found
-    elif isinstance(data, list):
-        for item in data:
-            found = _find_figure_data(item, needle)
-            if found is not None:
-                return found
-    return None
+    answer = report.get("answer") or {}
+    parts = [f"Analysis: {report.get('title') or study.title}", f"Goal: {study.goal}"]
+    if answer:
+        parts.append(f"Answer: {answer.get('headline', '')} {answer.get('body', '')}")
+    if report.get("findings"):
+        parts.append("Findings:\n" + "\n".join(f"- {f}" for f in report["findings"]))
+    for step in report["steps"]:
+        if step.get("status") != "completed":
+            continue
+        figures = [
+            f"{i.get('label')}: {i.get('value')} {i.get('unit', '')}".strip()
+            for b in step.get("blocks", []) if b.get("type") == "stats" for i in b.get("items", [])
+        ]
+        parts.append(
+            f"### {step['title']}\n{step.get('summary', '')}"
+            + ("\nFigures: " + "; ".join(figures) if figures else "")
+        )
+    return "\n\nThe most recent analysis in this chat:\n\n" + "\n\n".join(parts)
 
 
-_PHASE_TO_SECTION = {
-    "market_sizing": "market_overview",
-    "competitive": "competitive_landscape",
-    "financial": "financial_feasibility",
-    "risk": "risk_assessment",
-    "synthesis": "executive_summary",
-}
+def _block_text(block: dict) -> str:
+    """Every human-readable string in a block, for matching a user's question
+    about a figure to the block that shows it."""
+    out: list[str] = []
+
+    def walk(v: object) -> None:
+        if isinstance(v, str):
+            out.append(v)
+        elif isinstance(v, dict):
+            for k, x in v.items():
+                if k not in ("id", "type", "citations", "basis"):
+                    walk(x)
+        elif isinstance(v, list):
+            for x in v:
+                walk(x)
+
+    walk(block)
+    return " ".join(out).lower()
+
+
+def _find_blocks(report: dict, needle: str, limit: int = 3) -> list[tuple[dict, dict]]:
+    """(step, block) pairs whose text mentions every word of `needle`."""
+    words = [w for w in needle.lower().split() if w]
+    found: list[tuple[dict, dict]] = []
+    for step in report.get("steps", []):
+        for block in step.get("blocks", []):
+            text = _block_text(block)
+            if words and all(w in text for w in words):
+                found.append((step, block))
+                if len(found) >= limit:
+                    return found
+    return found
 
 
 def _build_tools(
@@ -396,15 +374,24 @@ def _build_tools(
         study_id: str | None = None,
         chart_data: dict | None = None,
         artifact: dict | None = None,
+        existing_row: ChatMessage | None = None,
     ) -> str:
-        tool_message_row = ChatMessage(
-            role="tool", content=content, tool_name=tool_name, status="complete",
-            study_id=study_id, chart_data=chart_data,
-            artifact_id=artifact["id"] if artifact else None,
-        )
-        session.messages.append(tool_message_row)
+        if existing_row is not None:
+            # A row written when the tool started (see run_analysis_tool) —
+            # finish it in place rather than adding a second one.
+            tool_message_row = existing_row
+            tool_message_row.content = content
+            tool_message_row.status = "complete"
+            tool_message_row.study_id = study_id or tool_message_row.study_id
+        else:
+            tool_message_row = ChatMessage(
+                role="tool", content=content, tool_name=tool_name, status="complete",
+                study_id=study_id, chart_data=chart_data,
+                artifact_id=artifact["id"] if artifact else None,
+            )
+            session.messages.append(tool_message_row)
         # Heartbeat the assistant placeholder row too — a single tool call
-        # (e.g. the full feasibility-study pipeline) can run far longer than
+        # (e.g. a full analysis run) can run far longer than
         # the streaming flush interval, and the stuck-generation sweep in
         # app.main relies on updated_at staying fresh.
         assistant_message.updated_at = datetime.utcnow()
@@ -425,7 +412,7 @@ def _build_tools(
             )
         return content
 
-    async def _run_tool_safely(tool_name: str, body) -> str:
+    async def _run_tool_safely(tool_name: str, body, existing_row=None) -> str:
         try:
             result = await body()
         except Exception as exc:
@@ -451,7 +438,9 @@ def _build_tools(
         # artifact) — padding to length 4 lets both shapes flow through the
         # same call without touching every existing tool's return sites.
         content, study_id, chart_data, artifact = (tuple(result) + (None, None, None, None))[:4]
-        return await _finish_tool_call(tool_name, content, study_id, chart_data, artifact)
+        if callable(existing_row):
+            existing_row = existing_row()
+        return await _finish_tool_call(tool_name, content, study_id, chart_data, artifact, existing_row)
 
     @tool
     async def web_research_tool(query: str) -> str:
@@ -565,124 +554,65 @@ def _build_tools(
     if project.business_profile is None:
         # Nothing else is safe to expose yet: every other tool below reads
         # project.business_profile directly (via _system_prompt, or via
-        # study.feasibility_input_from_business_profile) and would crash on
+        # the analysis engine) and would crash on
         # None — rather than scattering null-checks through all of them,
         # the profile's existence gates the whole tool list instead.
         return [bootstrap_profile_tool, web_research_tool]
 
     @tool
-    async def run_feasibility_study_tool() -> str:
-        """Run the COMPLETE, FULL feasibility study pipeline — market sizing,
-        competitive analysis, financial modeling, risk assessment, AND the
-        executive-summary synthesis — for this project's business profile.
+    async def run_analysis_tool(
+        goal: str, analysis_name: str | None = None, comprehensive: bool = False
+    ) -> str:
+        """Run a structured business analysis for this project — ANY analysis:
+        a feasibility study, market sizing, competitor analysis, financials,
+        risks, SWOT, PESTEL, Porter's Five Forces, personas, marketing or
+        pricing strategy, go-to-market... or a plain question such as "can I
+        compete with the big players?". It researches how the analysis is
+        done, plans it as steps, carries each step out with live web data and
+        a financial calculator, and produces a report with charts, tables,
+        boards, comparisons and diagrams.
 
-        ONLY use this when the user explicitly asks for the whole study/
-        report as a single unit — e.g. "run the full feasibility study",
-        "build the complete report", "give me the whole analysis". If the
-        user names just ONE specific capability (market sizing, competitive/
-        competitor analysis, financial analysis, risk analysis, or the
-        verdict/executive summary alone), you MUST use that capability's own
-        dedicated tool below instead — do NOT call this tool for a request
-        about a single topic, even if that topic happens to be one of this
-        pipeline's phases. When genuinely unsure whether the user wants one
-        section or the whole thing, prefer the single narrower tool — it's
-        far cheaper to run again for something extra than to run everything
-        when only one part was wanted. Each run creates a new, independently
-        viewable study — past runs are kept, not overwritten."""
+        Args:
+            goal: What the user wants to learn, why, and which decision it
+                should support — in the user's words, enriched with relevant
+                context from this conversation. Always required.
+            analysis_name: ONLY when the user explicitly named an analysis or
+                framework (e.g. "SWOT", "feasibility study"). Leave empty
+                otherwise — the tool chooses the approach itself.
+            comprehensive: true only for a full / complete / comprehensive
+                analysis of the whole business (allows a longer plan).
+
+        Each run creates a new, independently viewable report. Several can be
+        called in parallel in one turn."""
+
+        started_row: list[ChatMessage] = []
+
+        def _on_started(study_id: str) -> None:
+            # Persist the link to this run as soon as it exists, so the chat
+            # shows its card (with live progress) even after a page refresh
+            # mid-run. Finished in place by _finish_tool_call.
+            row = ChatMessage(
+                role="tool", content="Analysis started.", tool_name="run_analysis_tool",
+                status="pending", study_id=study_id,
+            )
+            session.messages.append(row)
+            db.commit()
+            started_row.append(row)
 
         async def _inner() -> tuple[str, str | None, dict | None]:
-            result = await run_feasibility_study(db, project, queue)
-            if result.status == "failed":
-                return f"Study failed: {result.error}", result.id, None
-            return (
-                f"Study completed. Verdict: {result.verdict}. "
-                f"Confidence score: {result.confidence_score}. "
-                f"Sections generated: {', '.join(result.sections.keys())}."
-            ), result.id, None
+            run = await run_analysis(
+                db, project.id, goal, analysis_name or None, queue,
+                comprehensive=comprehensive, on_started=_on_started,
+            )
+            label = run.title or analysis_name or "Analysis"
+            if run.status != "completed":
+                # Returned, not raised: sibling parallel tool calls in this
+                # turn must still complete.
+                return f"{label} failed: {run.error}", run.study_id, None
+            return f"{label} completed. Answer: {run.answer}", run.study_id, None
 
-        return await _run_tool_safely("run_feasibility_study_tool", _inner)
-
-    def _make_single_phase_tool_body(phase: str, label: str):
-        async def _inner() -> tuple[str, str | None, dict | None]:
-            result = await run_single_phase_study(db, project, phase, queue)
-            if result.status == "failed":
-                return f"{label} failed: {result.error}", result.id, None
-            section = _PHASE_TO_SECTION[phase]
-            if section not in (result.sections or {}):
-                return (
-                    f"{label} completed, but that section didn't come back — "
-                    f"sections generated this run: {', '.join(result.sections.keys())}."
-                ), result.id, None
-            return (
-                f"{label} completed. Sections generated this run: "
-                f"{', '.join(result.sections.keys())}."
-            ), result.id, None
-
-        return _inner
-
-    @tool
-    async def run_market_sizing_tool() -> str:
-        """Run ONLY market sizing (TAM/SAM/SOM estimation) for this project —
-        nothing else in the pipeline. Use this whenever the user asks about
-        market size, TAM/SAM/SOM, or market opportunity specifically, without
-        asking for the full study. Does not run competitive analysis,
-        financial modeling, risk assessment, or synthesis. Each run creates a
-        new, independently viewable partial study."""
         return await _run_tool_safely(
-            "run_market_sizing_tool", _make_single_phase_tool_body("market_sizing", "Market sizing")
-        )
-
-    @tool
-    async def run_competitive_analysis_tool() -> str:
-        """Run ONLY competitive/competitor analysis for this project — nothing
-        else in the pipeline. Use this whenever the user asks about
-        competitors, competitive landscape, or competitor analysis
-        specifically (however phrased — "competition analysis", "who are my
-        competitors", etc.), without asking for the full study. Does not run
-        market sizing, financial modeling, risk assessment, or synthesis.
-        Each run creates a new, independently viewable partial study."""
-        return await _run_tool_safely(
-            "run_competitive_analysis_tool",
-            _make_single_phase_tool_body("competitive", "Competitive analysis"),
-        )
-
-    @tool
-    async def run_financial_analysis_tool() -> str:
-        """Run ONLY financial modeling (capex/opex, break-even, ROI, NPV,
-        sensitivity, cash flow) for this project — nothing else in the
-        pipeline. Use this whenever the user asks about financials, costs,
-        break-even, ROI, or the financial model specifically, without asking
-        for the full study. Does not run market sizing, competitive analysis,
-        risk assessment, or synthesis. Each run creates a new, independently
-        viewable partial study."""
-        return await _run_tool_safely(
-            "run_financial_analysis_tool", _make_single_phase_tool_body("financial", "Financial analysis")
-        )
-
-    @tool
-    async def run_risk_analysis_tool() -> str:
-        """Run ONLY risk assessment for this project — nothing else in the
-        pipeline. Use this whenever the user asks about risks, risk profile,
-        or risk analysis specifically, without asking for the full study.
-        This still computes market sizing, competitive analysis, and
-        financial modeling first as inputs risk assessment depends on —
-        mention that if relevant — but does NOT run synthesis. Each run
-        creates a new, independently viewable partial study."""
-        return await _run_tool_safely(
-            "run_risk_analysis_tool", _make_single_phase_tool_body("risk", "Risk analysis")
-        )
-
-    @tool
-    async def run_synthesis_tool() -> str:
-        """Run ONLY the executive-summary synthesis (verdict + confidence
-        score) for this project. Use this when the user asks specifically for
-        the verdict, recommendation, or executive summary, without asking for
-        the full study. This still computes market sizing, competitive
-        analysis, financial modeling, and risk assessment first as inputs
-        synthesis depends on — mention that if relevant. Each run creates a
-        new, independently viewable partial study."""
-        return await _run_tool_safely(
-            "run_synthesis_tool", _make_single_phase_tool_body("synthesis", "Synthesis")
+            "run_analysis_tool", _inner, lambda: started_row[0] if started_row else None
         )
 
     @tool
@@ -924,9 +854,8 @@ def _build_tools(
         """Generate an actual PDF report — a flowing, paginated text
         document, NOT a slide deck — the user can download. Call this when
         the user explicitly asks for a PDF or "a PDF report" specifically.
-        Builds the report from the most recently completed feasibility
-        study if one exists, otherwise synthesizes one from this
-        conversation. `title` is the report's title (e.g. the business name
+        Builds the report from the most recently completed analysis if one
+        exists, otherwise synthesizes one from this conversation. `title` is the report's title (e.g. the business name
         or study topic). Do NOT use this for a PowerPoint/slide deck — use
         generate_presentation_tool for that."""
 
@@ -936,7 +865,7 @@ def _build_tools(
                 (s for s in project.study_results if s.status == "completed"), None
             )
             if study is not None:
-                markdown = build_study_markdown([study])
+                markdown = build_report_markdown([study])
             else:
                 markdown = await synthesize_chat_export(
                     session, None,
@@ -1044,60 +973,35 @@ def _build_tools(
         return await _run_tool_safely("revise_artifact_tool", _inner)
 
     @tool
-    async def explain_figure_tool(
-        figure_description: str,
-        section_hint: Literal[
-            "market_overview", "competitive_landscape",
-            "financial_feasibility", "risk_assessment", "executive_summary",
-        ] | None = None,
-    ) -> str:
-        """Explain the derivation, assumptions, methodology, and sources of
-        ONE specific number/entity already computed in this project's most
-        recent completed study (e.g. "TAM", "break-even months", "NPV", "the
-        regulatory risk"). Use this INSTEAD OF web_research_tool or
-        re-running any phase — never recompute or re-derive anything
-        yourself. `figure_description` is your best-effort name for the
-        figure as it appeared in the data already provided above.
-        `section_hint` narrows the search if you know which section it's
-        in."""
+    async def explain_figure_tool(figure_description: str) -> str:
+        """Explain where ONE specific figure, finding or item in this project's
+        most recent completed analysis comes from — its step, the block it
+        appears in, its basis (sourced / calculated / estimate) and its
+        sources (e.g. "break-even months", "market size", "Competitor X").
+        Use this INSTEAD OF web_research_tool or re-running the analysis —
+        never recompute or re-derive anything yourself. `figure_description`
+        is a few words naming the figure as it appeared in the report."""
 
         async def _inner() -> tuple[str, str | None, dict | None]:
             study = next(
                 (s for s in project.study_results if s.status == "completed"), None
             )
             if study is None:
-                return "No completed study exists yet for this project.", None, None
+                return "No completed analysis exists yet for this project.", None, None
 
-            sections = study.sections or {}
-            section_names = [section_hint] if section_hint else [
-                n for n in sections if n != "glossary"
+            matches = _find_blocks(study.report or {}, figure_description)
+            if not matches:
+                titles = [s["title"] for s in (study.report or {}).get("steps", [])]
+                return (
+                    f'Couldn\'t find "{figure_description}" in "{study.title}". '
+                    f"Its steps are: {'; '.join(titles) or 'none'}."
+                ), None, None
+            parts = [
+                f'Step "{step["title"]}" (summary: {step.get("summary", "")}):\n'
+                f"{json.dumps(block, ensure_ascii=False, default=str)}"
+                for step, block in matches
             ]
-            needle = figure_description.strip().lower()
-
-            for name in section_names:
-                envelope = sections.get(name)
-                data = envelope.get("data") if isinstance(envelope, dict) else None
-                if not data:
-                    continue
-                match = _find_figure_data(data, needle)
-                if match is not None:
-                    return (
-                        f'From the "{name}" section of "{study.title or study.id}" '
-                        f"(completed {study.completed_at}):\n"
-                        f"{json.dumps(match, ensure_ascii=False, default=str)}"
-                    ), None, None
-
-            available = sorted(
-                {
-                    key
-                    for name in section_names
-                    for key in ((sections.get(name) or {}).get("data") or {}).keys()
-                }
-            )
-            return (
-                f'Couldn\'t find "{figure_description}" in the study data. '
-                f"Available figures: {', '.join(available) or 'none'}."
-            ), None, None
+            return f'From "{study.title}":\n\n' + "\n\n".join(parts), None, None
 
         return await _run_tool_safely("explain_figure_tool", _inner)
 
@@ -1175,12 +1079,7 @@ def _build_tools(
         return await _run_tool_safely("run_scenario_simulation_tool", _inner)
 
     tools = [
-        run_feasibility_study_tool,
-        run_market_sizing_tool,
-        run_competitive_analysis_tool,
-        run_financial_analysis_tool,
-        run_risk_analysis_tool,
-        run_synthesis_tool,
+        run_analysis_tool,
         update_business_profile_tool,
         remember_fact_tool,
         generate_chart_tool,
@@ -1334,12 +1233,13 @@ async def _run_legacy_tool_loop(
             return assistant_message.content
 
         history.append(response)
-        for call in response.tool_calls:
+
+        async def _invoke(call: dict) -> str:
             tool_fn = tool_by_name.get(call["name"])
             try:
                 if tool_fn is None:
                     raise ValueError(f"Unknown tool: {call['name']}")
-                tool_result = await tool_fn.ainvoke(call["args"])
+                return await tool_fn.ainvoke(call["args"])
             except Exception as exc:
                 # The tool itself never got to run (bad args, unknown name) —
                 # every other failure is already caught and persisted inside
@@ -1358,8 +1258,27 @@ async def _run_legacy_tool_loop(
                     ChatMessage(role="tool", content=str(tool_result), tool_name=call["name"], status="complete")
                 )
                 db.commit()
+                return tool_result
 
-            history.append(ToolMessage(content=str(tool_result), tool_call_id=call["id"]))
+        # Custom analyses run concurrently (each uses its own DB session —
+        # see run_custom_analysis_study), alongside the other calls, which
+        # stay sequential since they share this turn's `db` across awaits.
+        calls = response.tool_calls
+        results: dict[int, str] = {}
+
+        async def _run_sequential(indices: list[int]) -> None:
+            for i in indices:
+                results[i] = await _invoke(calls[i])
+
+        async def _run_one(i: int) -> None:
+            results[i] = await _invoke(calls[i])
+
+        concurrent = [i for i, c in enumerate(calls) if c["name"] in _CONCURRENT_TOOL_NAMES]
+        sequential = [i for i in range(len(calls)) if i not in concurrent]
+        await asyncio.gather(_run_sequential(sequential), *(_run_one(i) for i in concurrent))
+
+        for i, call in enumerate(calls):
+            history.append(ToolMessage(content=str(results[i]), tool_call_id=call["id"]))
 
     logger.warning(
         "Chat tool loop hit the %s-round cap for project %s without a final reply",
@@ -1367,6 +1286,12 @@ async def _run_legacy_tool_loop(
         project_id,
     )
     return _FALLBACK_MESSAGE
+
+
+# Tools safe to run concurrently with each other and with one sequential
+# chain of other tools in the same round (they don't use the turn's shared
+# DB session across awaits).
+_CONCURRENT_TOOL_NAMES = frozenset({"run_analysis_tool"})
 
 
 async def _run_deep_agent_turn(

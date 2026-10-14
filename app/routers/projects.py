@@ -31,7 +31,7 @@ from app.services.chat import (
     list_chat_sessions,
 )
 from app.services.chat_agent import run_chat_turn
-from app.services.export import build_study_markdown, synthesize_chat_export
+from app.services.export import build_report_markdown, synthesize_chat_export
 from app.services.project import (
     business_profile_to_response,
     create_bare_project,
@@ -94,9 +94,8 @@ def update_business_profile_endpoint(
 @router.get("/{project_id}/studies", response_model=list[StudyResultResponse])
 def list_studies_endpoint(project_id: str, db: Session = Depends(get_db)) -> list[StudyResultResponse]:
     """Read-only. There is deliberately no public POST .../studies route —
-    per the plan, the feasibility pipeline is only triggered through the chat
-    agent's run_feasibility_study tool (see chat/messages below), not as a
-    standalone public flow. Newest-first, via the relationship's order_by."""
+    analyses are only started through the chat agent's run_analysis_tool
+    (see chat/messages below). Newest-first."""
     project = get_project(db, project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -135,7 +134,7 @@ def export_study_markdown_endpoint(
     )
     if study is None:
         raise HTTPException(status_code=404, detail="Study not found")
-    return PlainTextResponse(build_study_markdown([study]), media_type="text/markdown")
+    return PlainTextResponse(build_report_markdown([study]), media_type="text/markdown")
 
 
 @router.get("/{project_id}/chat/sessions", response_model=list[ChatSessionResponse])

@@ -5,7 +5,6 @@ const NAV_ITEMS = [
   { to: '/admin/studies', label: 'Studies' },
   { to: '/admin/chat-sessions', label: 'Chat Sessions' },
   { to: '/admin/memory', label: 'Memory' },
-  { to: '/admin/glossary', label: 'Glossary' },
 ]
 
 // Root layout for the /admin section — sidebar nav + a permanent warning

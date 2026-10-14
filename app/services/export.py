@@ -1,14 +1,12 @@
 """
 Markdown document export — two independent modes sharing one renderer:
 
-Mode A (build_study_markdown): deterministic, no LLM — walks a StudyResult's
-already-computed `sections` data straight into markdown, in the same order
-StudyReportPage's table of contents uses.
+Mode A (build_report_markdown): deterministic, no LLM — renders an analysis
+report's steps and blocks straight into markdown. Every block type has a
+generic rendering, so any analysis exports completely.
 
 Mode B (synthesize_chat_export): a chat conversation has no fixed structure
-to walk, so it needs a synthesis pass — same narrow, non-tool-calling
-one-shot-LLM-call shape as app.services.study_title.generate_study_title,
-not a full agent turn.
+to walk, so it needs a synthesis pass — one narrow, non-tool-calling LLM call.
 """
 
 from __future__ import annotations
@@ -19,70 +17,102 @@ from pydantic import BaseModel
 
 from app.models import ChatSession, StudyResult
 
-# Same idea as chat_agent.py's _STUDY_CONTEXT_VERBOSE_KEYS (not imported
-# directly — see that module's own note on why importing back would be
-# circular): strip citation/trace noise a human reader doesn't need.
-_VERBOSE_KEYS = frozenset(
-    {"citations", "calculation_trace", "claim_type", "claim_types", "search_queries_used", "methodology"}
-)
 
-_SECTION_TITLES: dict[str, str] = {
-    "executive_summary": "Executive Summary",
-    "market_overview": "Market Overview",
-    "competitive_landscape": "Competitive Landscape",
-    "financial_feasibility": "Financial Feasibility",
-    "risk_assessment": "Risk Assessment",
-}
-_SECTION_ORDER = list(_SECTION_TITLES)
+def _cell(value: object) -> str:
+    return str("" if value is None else value).replace("|", "\\|").replace("\n", " ")
 
 
-def _humanize(key: str) -> str:
-    return key.replace("_", " ").strip().capitalize()
-
-
-def _render_value(value: object, depth: int) -> list[str]:
-    indent = "  " * depth
-    lines: list[str] = []
-    if isinstance(value, dict):
-        for key, val in value.items():
-            if key in _VERBOSE_KEYS:
-                continue
-            if isinstance(val, (dict, list)) and val:
-                lines.append(f"{indent}- **{_humanize(key)}**:")
-                lines.extend(_render_value(val, depth + 1))
-            else:
-                lines.append(f"{indent}- **{_humanize(key)}**: {val}")
-    elif isinstance(value, list):
-        for item in value:
-            if isinstance(item, (dict, list)):
-                lines.extend(_render_value(item, depth))
-            else:
-                lines.append(f"{indent}- {item}")
-    else:
-        lines.append(f"{indent}{value}")
+def _md_table(columns: list[str], rows: list[list[object]]) -> list[str]:
+    lines = ["| " + " | ".join(_cell(c) for c in columns) + " |", "|" + "---|" * len(columns)]
+    lines += ["| " + " | ".join(_cell(c) for c in row) + " |" for row in rows]
     return lines
 
 
-def build_study_markdown(studies: list[StudyResult]) -> str:
-    """Deterministic markdown for one or more studies — one top-level `#`
-    heading per study, sections nested underneath. No LLM involvement."""
+def _render_block(b: dict) -> list[str]:
+    t = b.get("type")
+    out: list[str] = [f"#### {b['title']}"] if b.get("title") else []
+    if t == "answer":
+        out += [f"**{b.get('headline', '')}**", "", b.get("body", ""), f"*Confidence: {b.get('confidence')}*"]
+    elif t == "text":
+        out.append(b.get("markdown", ""))
+    elif t == "stats":
+        out += [
+            f"- **{i.get('label')}**: {i.get('value')} {i.get('unit', '')}".rstrip()
+            + (f" — {i['note']}" if i.get("note") else "")
+            + f" *({i.get('basis')})*"
+            for i in b.get("items", [])
+        ]
+    elif t == "chart":
+        cols = [b.get("x_label") or ""] + [s["name"] for s in b.get("series", [])]
+        rows = [
+            [cat] + [s["data"][i] if i < len(s["data"]) else "" for s in b.get("series", [])]
+            for i, cat in enumerate(b.get("categories", []))
+        ]
+        out += _md_table(cols, rows)
+    elif t == "table":
+        out += _md_table(b.get("columns", []), b.get("rows", []))
+        if b.get("caption"):
+            out.append(f"*{b['caption']}*")
+    elif t == "comparison":
+        rows = [[opt] + list(scores) for opt, scores in zip(b.get("options", []), b.get("scores", []))]
+        out += _md_table([""] + b.get("criteria", []), rows)
+        if b.get("verdict"):
+            out.append(f"**{b['verdict']}**")
+    elif t == "board":
+        for cell in b.get("cells", []):
+            out.append(f"**{cell.get('title')}**" + (f" — {cell['subtitle']}" if cell.get("subtitle") else ""))
+            out += [
+                f"- {i.get('label')}" + (f": {i['detail']}" if i.get("detail") else "")
+                for i in cell.get("items", [])
+            ]
+            out.append("")
+    elif t == "matrix":
+        out.append(f"*{b.get('x_axis')} (x) vs {b.get('y_axis')} (y), 0-10*")
+        out += _md_table(["", "x", "y"], [[p["label"], p["x"], p["y"]] for p in b.get("points", [])])
+    elif t == "diagram":
+        out += ["```mermaid", b.get("mermaid", ""), "```"]
+    elif t == "timeline":
+        for ph in b.get("phases", []):
+            span = " – ".join(x for x in (ph.get("start"), ph.get("end")) if x)
+            out.append(f"**{ph.get('label')}**" + (f" ({span})" if span else ""))
+            out += [f"- {i}" for i in ph.get("items", [])]
+    elif t == "list":
+        for n, i in enumerate(b.get("items", []), start=1):
+            bullet = f"{n}." if b.get("style") == "numbered" else "- [ ]" if b.get("style") == "checklist" else "-"
+            out.append(f"{bullet} **{i.get('label')}**" + (f": {i['detail']}" if i.get("detail") else ""))
+    sources = [c.get("title") or c.get("url") for c in b.get("citations", [])]
+    if sources:
+        out.append("*Sources: " + "; ".join(sources) + "*")
+    out.append("")
+    return out
+
+
+def build_report_markdown(studies: list[StudyResult]) -> str:
+    """Deterministic markdown for one or more analyses — one top-level `#`
+    heading per analysis, its steps nested underneath. No LLM involvement."""
     parts: list[str] = []
     for study in studies:
-        heading = study.title or f"Study {study.id[:8]}"
-        parts.append(f"# {heading}")
-        parts.append(
-            f"*Status: {study.status} · Verdict: {study.verdict or 'n/a'} · "
-            f"Confidence: {study.confidence_score if study.confidence_score is not None else 'n/a'}*"
-        )
+        report = study.report or {}
+        parts.append(f"# {study.title or report.get('title') or 'Analysis'}")
+        if study.goal:
+            parts.append(f"*Question: {study.goal}*")
         parts.append("")
-        for section_name in _SECTION_ORDER:
-            envelope = (study.sections or {}).get(section_name)
-            data = envelope.get("data") if isinstance(envelope, dict) else None
-            if not data:
-                continue
-            parts.append(f"## {_SECTION_TITLES[section_name]}")
-            parts.extend(_render_value(data, 0))
-            parts.append("")
+        answer = report.get("answer")
+        if answer:
+            parts += ["## Answer", f"**{answer.get('headline', '')}**", "", answer.get("body", ""), ""]
+        for key, heading in (("findings", "Key findings"), ("recommendations", "Recommendations")):
+            if report.get(key):
+                parts += [f"## {heading}"] + [f"- {x}" for x in report[key]] + [""]
+        for step in report.get("steps", []):
+            parts.append(f"## {step.get('title')}")
+            if step.get("summary"):
+                parts += [step["summary"], ""]
+            for block in step.get("blocks", []):
+                parts += _render_block(block)
+        if report.get("sources"):
+            parts += ["## Sources"] + [
+                f"{n}. [{c.get('title') or c['url']}]({c['url']})" for n, c in enumerate(report["sources"], 1)
+            ] + [""]
     return "\n".join(parts).strip() + "\n"
 
 
@@ -105,7 +135,7 @@ async def synthesize_chat_export(
         for m in session.messages
         if m.deleted_at is None and m.role in ("user", "assistant") and m.content
     )
-    grounding = f"\n\nGrounding study data:\n{build_study_markdown(studies)}" if studies else ""
+    grounding = f"\n\nGrounding analysis data:\n{build_report_markdown(studies)}" if studies else ""
 
     llm = ChatGoogleGenerativeAI(model=reasoning_model, google_api_key=google_api_key, temperature=0.2)
     structured = llm.with_structured_output(_ChatExportResult)

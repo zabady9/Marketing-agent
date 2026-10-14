@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.db import SessionLocal
+from app.db import SessionLocal, check_database_is_migrated
 from app.models import ChatMessage
 from app.routers.admin import router as admin_router
 from app.routers.attachments import router as attachments_router
@@ -16,6 +16,17 @@ from app.routers.projects import router as projects_router
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
+
+# uvicorn only configures its own loggers, so app.* INFO lines (e.g. the
+# per-run search/LLM-call counts in app.services.study) were silently
+# dropped. Give the "app" namespace its own handler (still propagating, so
+# test log capture keeps working).
+_app_logger = logging.getLogger("app")
+if not _app_logger.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+    _app_logger.addHandler(_handler)
+    _app_logger.setLevel(logging.INFO)
 
 # Generous on purpose: a single tool call within a chat turn (e.g. the full
 # feasibility-study pipeline) can legitimately run for several minutes, and
@@ -63,6 +74,7 @@ async def _sweep_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    check_database_is_migrated()
     task = asyncio.create_task(_sweep_loop())
     try:
         yield

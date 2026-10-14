@@ -360,6 +360,7 @@ export async function* streamChatMessage(
   sessionId: string,
   content: string,
   attachmentIds: string[] = [],
+  signal?: AbortSignal,
 ): AsyncGenerator<ChatSSEEvent> {
   const res = await fetch(
     `${BASE}/api/projects/${projectId}/chat/sessions/${sessionId}/messages`,
@@ -367,6 +368,7 @@ export async function* streamChatMessage(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content, attachment_ids: attachmentIds }),
+      signal,
     },
   )
   if (!res.ok) {
@@ -393,10 +395,12 @@ export async function* resumeChatMessageStream(
   sessionId: string,
   messageId: string,
   alreadyHaveLength: number,
+  signal?: AbortSignal,
 ): AsyncGenerator<ChatSSEEvent> {
   const res = await fetch(
     `${BASE}/api/projects/${projectId}/chat/sessions/${sessionId}/messages/${messageId}/stream` +
       `?after=${alreadyHaveLength}`,
+    { signal },
   )
   if (!res.ok) {
     throw new Error(await errorMessageFor(res))

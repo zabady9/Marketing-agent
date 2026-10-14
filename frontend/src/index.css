@@ -27,11 +27,15 @@
     background: #fff;
   }
 
-  /* Force a page break between each top-level report section instead of
-     letting a section split awkwardly across pages. */
+  /* Each report step starts on a new page; long steps may span pages, but
+     individual blocks (charts, tables, boards) don't split — see the
+     break-inside-avoid class on BlockRenderer. */
   section {
-    break-inside: avoid;
     page-break-after: always;
+  }
+
+  .break-inside-avoid {
+    break-inside: avoid;
   }
 
   section:last-of-type {
@@ -50,15 +54,7 @@
     font-size: 9pt !important;
   }
 
-  /* Calculation-trace disclosures (MethodologyDisclosure) are a click-to-reveal
-     <details> on screen. A reader can't click anything in a PDF, so
-     StudyReportPage forces every <details> element's `open` attribute true
-     just before printing (see its beforeprint/afterprint handler) — once
-     open, the browser's own default rendering already shows the content, no
-     CSS override needed for that. This just hides the now-redundant toggle
-     affordance once printed/open. (JargonTerm doesn't use <details> at all —
-     it's embedded inline inside <p>/<span> label text, so it handles its own
-     print visibility via a plain CSS class instead — see its component.) */
+  /* No <details> on the report needs a toggle in print. */
   details[open] > summary {
     display: none !important;
   }

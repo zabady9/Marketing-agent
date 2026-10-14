@@ -1,153 +1,92 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useReactToPrint } from 'react-to-print'
-import { exportStudyMarkdown, getProject, getStudyById, StudyNotFoundError } from '../api'
-import type { ProjectSummary, StudyResultResponse } from '../types'
-import { formatDate, formatPercent, getStudyTitle } from '../lib/format'
+import { exportStudyMarkdown, getProject } from '../api'
+import type { AnalysisStep, ProjectSummary } from '../types'
+import { formatDate, getStudyTitle } from '../lib/format'
 import { isRtlLanguage } from '../lib/rtl'
-import { MarketOverviewSection } from '../components/report/sections/MarketOverviewSection'
-import { CompetitiveLandscapeSection } from '../components/report/sections/CompetitiveLandscapeSection'
-import { FinancialFeasibilitySection } from '../components/report/sections/FinancialFeasibilitySection'
-import { RiskAssessmentSection } from '../components/report/sections/RiskAssessmentSection'
-import { ExecutiveSummarySection } from '../components/report/sections/ExecutiveSummarySection'
-import { MethodologyAppendix } from '../components/report/sections/MethodologyAppendix'
-import { GlossaryProvider } from '../components/report/GlossaryContext'
+import { useStudy } from '../hooks/useStudy'
+import { buildCitationRegistry, type CitationRegistry } from '../components/report/citations'
+import { CitationFootnotes } from '../components/report/CitationFootnotes'
+import { BlockRenderer } from '../components/report/blocks/BlockRenderer'
+import { Markdown } from '../components/report/blocks/Markdown'
+import { StepChecklist } from '../components/report/StepChecklist'
 
-type LoadState = 'loading' | 'not_found' | 'error' | 'loaded'
+const ANCHOR = 'src'
 
-const POLL_INTERVAL_MS = 5000
+function StepSection({ step, index, registry }: { step: AnalysisStep; index: number; registry: CitationRegistry }) {
+  return (
+    <section id={`step-${step.id}`} className="scroll-mt-20 rounded-xl border border-gray-200 bg-white p-5 sm:p-6">
+      <div className="flex items-start gap-3">
+        <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-sm font-semibold text-white">
+          {index + 1}
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-lg font-semibold text-gray-900">{step.title}</h2>
+          {step.objective && <p className="text-sm text-gray-500">{step.objective}</p>}
+        </div>
+      </div>
 
-const VERDICT_LABELS: Record<string, string> = {
-  proceed: 'Proceed',
-  proceed_with_caution: 'Proceed with caution',
-  do_not_proceed: 'Do not proceed',
-  unavailable: 'Unavailable',
+      {step.status === 'pending' || step.status === 'running' ? (
+        <p className="mt-4 text-sm text-gray-400">{step.status === 'running' ? 'Working on this step…' : 'Waiting…'}</p>
+      ) : step.status === 'failed' && step.blocks.length === 0 ? (
+        <p className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
+          This step couldn't be completed{step.error ? `: ${step.error}` : '.'}
+        </p>
+      ) : (
+        <div className="mt-4 space-y-6">
+          {step.summary && <Markdown text={step.summary} className="text-sm font-medium text-gray-800" />}
+          {step.blocks.map((block) => (
+            <BlockRenderer key={block.id} block={block} registry={registry} anchorPrefix={ANCHOR} />
+          ))}
+        </div>
+      )}
+    </section>
+  )
 }
-
-const VERDICT_CLASSES: Record<string, string> = {
-  proceed: 'bg-emerald-100 text-emerald-700',
-  proceed_with_caution: 'bg-amber-100 text-amber-700',
-  do_not_proceed: 'bg-red-100 text-red-700',
-  unavailable: 'bg-gray-100 text-gray-600',
-}
-
-const TOC: { id: string; label: string; has: (study: StudyResultResponse) => boolean }[] = [
-  { id: 'executive-summary', label: 'Executive Summary', has: (s) => !!s.sections.executive_summary },
-  { id: 'market-overview', label: 'Market Overview', has: (s) => !!s.sections.market_overview },
-  {
-    id: 'competitive-landscape',
-    label: 'Competitive Landscape',
-    has: (s) => !!s.sections.competitive_landscape,
-  },
-  {
-    id: 'financial-feasibility',
-    label: 'Financial Feasibility',
-    has: (s) => !!s.sections.financial_feasibility,
-  },
-  { id: 'risk-assessment', label: 'Risk Assessment', has: (s) => !!s.sections.risk_assessment },
-  { id: 'methodology-sources', label: 'Methodology & Sources', has: () => true },
-]
 
 export function StudyReportPage() {
   const { projectId, studyId } = useParams<{ projectId: string; studyId: string }>()
-  const [state, setState] = useState<LoadState>('loading')
-  const [error, setError] = useState<string | null>(null)
-  const [study, setStudy] = useState<StudyResultResponse | null>(null)
+  const { study, state, error, reload } = useStudy(projectId, studyId)
   const [project, setProject] = useState<ProjectSummary | null>(null)
+  const [exportError, setExportError] = useState<string | null>(null)
+  const [exporting, setExporting] = useState(false)
   const reportRef = useRef<HTMLDivElement>(null)
 
-  const load = useCallback(() => {
-    if (!projectId || !studyId) return
-    getProject(projectId)
-      .then(setProject)
-      .catch(() => {
-        // Cosmetic (cover block name) only — a failure here shouldn't block the report.
-      })
-    return getStudyById(projectId, studyId)
-      .then((data) => {
-        setStudy(data)
-        setState('loaded')
-        setError(null)
-      })
-      .catch((err) => {
-        if (err instanceof StudyNotFoundError) {
-          setState('not_found')
-          return
-        }
-        setError(err instanceof Error ? err.message : 'Failed to load the study report.')
-        setState('error')
-      })
-  }, [projectId, studyId])
-
   useEffect(() => {
-    setState('loading')
-    load()
-  }, [load])
+    if (!projectId) return
+    getProject(projectId).then(setProject).catch(() => {})
+  }, [projectId])
 
-  // Light polling refresh while the study is still running.
-  useEffect(() => {
-    if (state !== 'loaded' || study?.status !== 'running') return
-    const interval = setInterval(() => {
-      load()
-    }, POLL_INTERVAL_MS)
-    return () => clearInterval(interval)
-  }, [state, study?.status, load])
+  const report = useMemo(() => study?.report ?? {}, [study])
+  const steps = useMemo(() => report.steps ?? [], [report])
+  const registry = useMemo(
+    () => buildCitationRegistry([report.sources, ...steps.flatMap((s) => s.blocks.map((b) => b.citations))]),
+    [report.sources, steps],
+  )
+  const methodRegistry = useMemo(() => buildCitationRegistry([report.method_sources]), [report.method_sources])
 
-  const reactToPrintFn = useReactToPrint({
+  const print = useReactToPrint({
     contentRef: reportRef,
-    documentTitle: `${project?.name ?? projectId ?? 'feasibility-study'} - Study Report`,
+    documentTitle: study ? getStudyTitle(study) : 'analysis',
   })
 
-  const [exporting, setExporting] = useState(false)
   const handleExportMarkdown = () => {
     if (!projectId || !studyId || exporting) return
     setExporting(true)
+    setExportError(null)
     exportStudyMarkdown(projectId, studyId)
       .then((markdown) => {
-        const blob = new Blob([markdown], { type: 'text/markdown' })
-        const url = URL.createObjectURL(blob)
+        const url = URL.createObjectURL(new Blob([markdown], { type: 'text/markdown' }))
         const a = document.createElement('a')
         a.href = url
-        a.download = `${project?.name ?? 'study'}-report.md`
+        a.download = `${study ? getStudyTitle(study) : 'analysis'}.md`
         a.click()
         URL.revokeObjectURL(url)
       })
+      .catch((err) => setExportError(err instanceof Error ? err.message : 'Export failed.'))
       .finally(() => setExporting(false))
   }
-
-  // Every MethodologyDisclosure is a click-to-reveal <details> — a reader
-  // can't click anything in a PDF. Force them all open right before
-  // printing (native <details> rendering already shows the content once
-  // `open` is true, no CSS trick needed) and restore whatever state they
-  // were actually in afterward, so the on-screen experience is unaffected
-  // by having printed. (JargonTerm handles its own print visibility via
-  // CSS instead — see its component — since it can't use <details> at all,
-  // being embedded inline inside <p>/<span> label text.)
-  useEffect(() => {
-    let previouslyOpen: HTMLDetailsElement[] = []
-
-    function openAllDetails() {
-      const all = reportRef.current?.querySelectorAll('details') ?? []
-      previouslyOpen = Array.from(all).filter((d) => d.open)
-      all.forEach((d) => {
-        d.open = true
-      })
-    }
-
-    function restoreDetails() {
-      const all = reportRef.current?.querySelectorAll('details') ?? []
-      all.forEach((d) => {
-        d.open = previouslyOpen.includes(d)
-      })
-    }
-
-    window.addEventListener('beforeprint', openAllDetails)
-    window.addEventListener('afterprint', restoreDetails)
-    return () => {
-      window.removeEventListener('beforeprint', openAllDetails)
-      window.removeEventListener('afterprint', restoreDetails)
-    }
-  }, [])
 
   if (state === 'loading') {
     return (
@@ -156,46 +95,22 @@ export function StudyReportPage() {
           <div className="h-8 w-64 rounded bg-gray-200" />
           <div className="h-40 rounded-xl bg-gray-200" />
           <div className="h-40 rounded-xl bg-gray-200" />
-          <div className="h-40 rounded-xl bg-gray-200" />
         </div>
       </div>
     )
   }
 
-  if (state === 'not_found') {
+  if (!study) {
     return (
       <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center gap-4 px-4">
-        <div className="rounded-lg border border-gray-200 bg-white px-6 py-8 text-center max-w-md">
-          <p className="text-gray-700 font-medium mb-1">
-            This study report couldn't be found.
-          </p>
-          <p className="text-sm text-gray-500">
-            It may have been removed, or the link is out of date. Check the project page for its
-            current reports, or ask the assistant in chat to run a new feasibility study.
-          </p>
+        <div className="max-w-md rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-center text-sm text-red-700">
+          {state === 'not_found' ? 'This analysis does not exist or was deleted.' : (error ?? 'Failed to load the analysis.')}
         </div>
-        <Link
-          to={`/projects/${projectId}`}
-          className="rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 transition-colors"
-        >
-          Go to project →
-        </Link>
-      </div>
-    )
-  }
-
-  if (state === 'error' || !study) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center gap-4 px-4">
-        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 max-w-md text-center">
-          {error ?? 'Failed to load the study report.'}
-        </div>
-        <button
-          onClick={load}
-          className="rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 transition-colors"
-        >
-          Retry
-        </button>
+        {state === 'error' && (
+          <button onClick={reload} className="rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700">
+            Retry
+          </button>
+        )}
         <Link to={`/projects/${projectId}`} className="text-sm text-gray-500 hover:text-gray-700">
           ← Back to project
         </Link>
@@ -203,35 +118,28 @@ export function StudyReportPage() {
     )
   }
 
-  const { sections } = study
-  const language =
-    sections.executive_summary?.language ??
-    sections.financial_feasibility?.language ??
-    sections.market_overview?.language ??
-    sections.competitive_landscape?.language ??
-    sections.risk_assessment?.language ??
-    'en'
-  const dir = isRtlLanguage(language) ? 'rtl' : 'ltr'
-  const preparedDate = study.completed_at ?? study.started_at ?? study.created_at
+  const running = study.status === 'pending' || study.status === 'running'
+  const dir = isRtlLanguage(report.language) ? 'rtl' : 'ltr'
+  const doneSteps = steps.filter((s) => s.status === 'completed' || s.status === 'failed').length
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <div className="print:hidden sticky top-0 z-10 border-b border-gray-200 bg-white px-4 py-3 flex items-center justify-between">
-        <Link to={`/projects/${projectId}`} className="text-sm text-gray-500 hover:text-gray-700">
-          ← Project
+      <div className="print:hidden sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-gray-200 bg-white px-4 py-3">
+        <Link to={`/projects/${projectId}/chat`} className="text-sm text-gray-500 hover:text-gray-700">
+          ← Chat
         </Link>
-        <p className="text-sm font-medium text-gray-700">Study Report</p>
         <div className="flex items-center gap-2">
           <button
             onClick={handleExportMarkdown}
-            disabled={exporting}
-            className="rounded-lg border border-gray-300 px-4 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-50"
+            disabled={exporting || running}
+            className="rounded-lg border border-gray-300 px-3 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50"
           >
             {exporting ? 'Exporting…' : 'Export Markdown'}
           </button>
           <button
-            onClick={() => reactToPrintFn()}
-            className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-700 transition-colors"
+            onClick={() => print()}
+            disabled={running}
+            className="rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
           >
             Export PDF
           </button>
@@ -239,87 +147,120 @@ export function StudyReportPage() {
       </div>
 
       <div ref={reportRef} dir={dir} className="px-4 py-8">
-        <div className="max-w-4xl mx-auto space-y-6">
-          {study.status === 'running' && (
-            <div className="rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-700">
-              The feasibility study is still running — this page refreshes automatically every few
-              seconds.
+        <div className="mx-auto max-w-4xl space-y-6">
+          {exportError && (
+            <div className="print:hidden rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">{exportError}</div>
+          )}
+
+          <div className="rounded-xl border border-gray-200 bg-white p-6">
+            {project?.name && <p className="text-xs font-medium uppercase tracking-wide text-gray-400">{project.name}</p>}
+            <h1 className="mt-1 text-2xl font-semibold tracking-tight text-gray-900">{getStudyTitle(study)}</h1>
+            <p className="mt-1 text-xs text-gray-400">{formatDate(study.completed_at ?? study.started_at ?? study.created_at)}</p>
+            {study.goal && (
+              <div className="mt-4">
+                <p className="text-xs font-medium text-gray-500">Your question</p>
+                <p className="text-sm text-gray-900">{study.goal}</p>
+              </div>
+            )}
+            {report.rationale && (
+              <div className="mt-3">
+                <p className="text-xs font-medium text-gray-500">Why this analysis</p>
+                <p className="text-sm text-gray-700">{report.rationale}</p>
+                {!!report.frameworks?.length && (
+                  <div className="mt-1.5 flex flex-wrap gap-1.5">
+                    {report.frameworks.map((f) => (
+                      <span key={f} className="rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-700">{f}</span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {running && (
+            <div className="print:hidden rounded-xl border border-indigo-200 bg-indigo-50 p-5">
+              <p className="text-sm font-medium text-indigo-800">
+                {steps.length
+                  ? `Working… ${doneSteps}/${steps.length} steps done`
+                  : 'Researching how to do this analysis and planning the steps…'}
+              </p>
+              {steps.length > 0 && (
+                <div className="mt-3">
+                  <StepChecklist steps={steps} />
+                </div>
+              )}
+              <p className="mt-2 text-xs text-indigo-600">This page updates by itself.</p>
             </div>
           )}
           {study.status === 'failed' && (
             <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-              The study run failed{study.error ? `: ${study.error}` : '.'} Showing whatever sections
-              completed before the failure.
-            </div>
-          )}
-          {study.fatal_agent_failures.length > 0 && study.status !== 'failed' && (
-            <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
-              Some agents failed to complete: {study.fatal_agent_failures.join(', ')}.
+              The analysis failed{study.error ? `: ${study.error}` : '.'}
+              {steps.some((s) => s.blocks.length) ? ' Showing the steps that completed.' : ''}
             </div>
           )}
 
-          {/* Cover block */}
-          <div className="rounded-xl border border-gray-200 bg-white p-6">
-            <p className="text-xs font-medium text-gray-400 uppercase tracking-wide">
-              {getStudyTitle(study)}
-            </p>
-            <h1 className="mt-1 text-2xl font-semibold text-gray-900 tracking-tight">
-              {project?.name ?? 'Untitled Project'}
-            </h1>
-            <div className="mt-3 flex flex-wrap items-center gap-3">
-              <span
-                className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide ${
-                  VERDICT_CLASSES[study.verdict ?? 'unavailable']
-                }`}
-              >
-                {VERDICT_LABELS[study.verdict ?? 'unavailable'] ?? study.verdict}
-              </span>
-              <span className="text-sm text-gray-500">
-                Confidence:{' '}
-                <span className="font-medium text-gray-800">
-                  {study.confidence_score === null ? '—' : formatPercent(study.confidence_score * 100, 0)}
-                </span>
-              </span>
-              <span className="text-sm text-gray-400">Prepared {formatDate(preparedDate)}</span>
-            </div>
-          </div>
+          {report.answer && (
+            <section className="rounded-xl border border-indigo-200 bg-white p-6">
+              <BlockRenderer block={{ type: 'answer', id: 'answer', citations: [], ...report.answer }} />
+              <div className="mt-5 grid gap-5 sm:grid-cols-2">
+                {!!report.findings?.length && (
+                  <div>
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Key findings</p>
+                    <ul className="list-disc space-y-1 ps-5 text-sm text-gray-700">
+                      {report.findings.map((f, i) => (
+                        <li key={i}>{f}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {!!report.recommendations?.length && (
+                  <div>
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Recommendations</p>
+                    <ol className="list-decimal space-y-1 ps-5 text-sm text-gray-700">
+                      {report.recommendations.map((r, i) => (
+                        <li key={i}>{r}</li>
+                      ))}
+                    </ol>
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
 
-          {/* Table of contents */}
-          <nav className="rounded-xl border border-gray-200 bg-white p-4 print:hidden">
-            <p className="text-xs font-semibold text-gray-500 mb-2">On this page</p>
-            <ul className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
-              {TOC.filter((item) => item.has(study)).map((item) => (
-                <li key={item.id}>
-                  <a href={`#${item.id}`} className="text-indigo-600 hover:underline">
-                    {item.label}
-                  </a>
-                </li>
-              ))}
-            </ul>
-          </nav>
+          {steps.length > 0 && !running && (
+            <nav className="print:hidden rounded-xl border border-gray-200 bg-white p-4">
+              <p className="mb-2 text-xs font-semibold text-gray-500">Steps</p>
+              <ol className="grid gap-1 text-sm sm:grid-cols-2">
+                {steps.map((s, i) => (
+                  <li key={s.id}>
+                    <a href={`#step-${s.id}`} className="text-indigo-600 hover:underline">
+                      {i + 1}. {s.title}
+                    </a>
+                  </li>
+                ))}
+              </ol>
+            </nav>
+          )}
 
-          <GlossaryProvider terms={sections.glossary?.data.terms}>
-            <div className="space-y-8">
-              {sections.executive_summary && (
-                <ExecutiveSummarySection data={sections.executive_summary.data} />
-              )}
-              {sections.market_overview && <MarketOverviewSection data={sections.market_overview.data} />}
-              {sections.competitive_landscape && (
-                <CompetitiveLandscapeSection data={sections.competitive_landscape.data} />
-              )}
-              {sections.financial_feasibility && (
-                <FinancialFeasibilitySection data={sections.financial_feasibility.data} />
-              )}
-              {sections.risk_assessment && <RiskAssessmentSection data={sections.risk_assessment.data} />}
+          {steps.map((step, i) => (
+            <StepSection key={step.id} step={step} index={i} registry={registry} />
+          ))}
 
-              <MethodologyAppendix
-                market={sections.market_overview?.data}
-                competitive={sections.competitive_landscape?.data}
-                risk={sections.risk_assessment?.data}
-                glossary={sections.glossary?.data.terms}
-              />
-            </div>
-          </GlossaryProvider>
+          {(registry.citations.length > 0 || methodRegistry.citations.length > 0) && (
+            <section className="rounded-xl border border-gray-200 bg-white p-6">
+              <h2 className="text-lg font-semibold text-gray-900">Sources</h2>
+              <CitationFootnotes registry={registry} anchorPrefix={ANCHOR} />
+              {methodRegistry.citations.length > 0 && (
+                <div className="mt-5">
+                  <p className="text-xs font-semibold text-gray-500">How this analysis was built</p>
+                  <p className="mt-1 text-xs text-gray-500">
+                    The method was researched from these sources, then planned as {steps.length} steps.
+                  </p>
+                  <CitationFootnotes registry={methodRegistry} anchorPrefix="method" />
+                </div>
+              )}
+            </section>
+          )}
         </div>
       </div>
     </div>

@@ -38,6 +38,7 @@ async def search(
     *,
     max_results: int = 5,
     search_depth: str = "advanced",
+    include_raw_content: bool = False,
 ) -> list[SearchResult]:
     """
     Run a single Tavily search with retry + backoff.
@@ -53,7 +54,7 @@ async def search(
                     query=query,
                     max_results=max_results,
                     search_depth=search_depth,
-                    include_raw_content=False,
+                    include_raw_content=include_raw_content,
                 )
             results = [
                 SearchResult(
@@ -61,6 +62,7 @@ async def search(
                     title=r.get("title", ""),
                     snippet=r.get("content", ""),
                     score=r.get("score", 0.0),
+                    raw_content=r.get("raw_content") or None,
                 )
                 for r in response.get("results", [])
             ]

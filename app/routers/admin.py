@@ -8,8 +8,6 @@ from app.models import BusinessProfile
 from app.schemas.admin import (
     ChatMessageAdminUpdate,
     ChatSessionAdminUpdate,
-    GlossaryCacheAdminUpdate,
-    GlossaryCacheResponse,
     MemoryEntryAdminUpdate,
     Page,
     ProjectAdminResponse,
@@ -32,13 +30,6 @@ from app.services.chat import (
     soft_delete_chat_session,
     update_chat_message,
     update_chat_session_title,
-)
-from app.services.glossary import (
-    get_glossary_cache_admin,
-    list_glossary_cache_admin,
-    restore_glossary_cache,
-    soft_delete_glossary_cache,
-    update_glossary_terms,
 )
 from app.services.memory import (
     get_memory_entry_admin,
@@ -166,7 +157,6 @@ def list_studies_endpoint(
     include_deleted: bool = False,
     project_id: str | None = None,
     status: str | None = None,
-    verdict: str | None = None,
     db: Session = Depends(get_db),
 ) -> Page[StudyResultResponse]:
     items, total = list_study_results_admin(
@@ -176,7 +166,6 @@ def list_studies_endpoint(
         include_deleted=include_deleted,
         project_id=project_id,
         status=status,
-        verdict=verdict,
     )
     return Page(
         items=[StudyResultResponse.model_validate(s) for s in items],
@@ -406,58 +395,3 @@ def restore_memory_endpoint(memory_id: str, db: Session = Depends(get_db)) -> Me
     if entry is None:
         raise HTTPException(status_code=404, detail="Memory entry not found")
     return restore_memory_entry(db, entry)
-
-
-# ── GlossaryCache ────────────────────────────────────────────────────────
-
-
-@router.get("/glossary", response_model=Page[GlossaryCacheResponse])
-def list_glossary_endpoint(
-    limit: int = _Limit,
-    offset: int = _Offset,
-    include_deleted: bool = False,
-    db: Session = Depends(get_db),
-) -> Page[GlossaryCacheResponse]:
-    items, total = list_glossary_cache_admin(
-        db, limit=limit, offset=offset, include_deleted=include_deleted
-    )
-    return Page(
-        items=[GlossaryCacheResponse.model_validate(g) for g in items],
-        total=total,
-        limit=limit,
-        offset=offset,
-    )
-
-
-@router.get("/glossary/{language}", response_model=GlossaryCacheResponse)
-def get_glossary_endpoint(language: str, db: Session = Depends(get_db)) -> GlossaryCacheResponse:
-    cache = get_glossary_cache_admin(db, language)
-    if cache is None:
-        raise HTTPException(status_code=404, detail="Glossary cache entry not found")
-    return cache
-
-
-@router.patch("/glossary/{language}", response_model=GlossaryCacheResponse)
-def update_glossary_endpoint(
-    language: str, patch: GlossaryCacheAdminUpdate, db: Session = Depends(get_db)
-) -> GlossaryCacheResponse:
-    cache = get_glossary_cache_admin(db, language)
-    if cache is None:
-        raise HTTPException(status_code=404, detail="Glossary cache entry not found")
-    return update_glossary_terms(db, cache, patch)
-
-
-@router.delete("/glossary/{language}", response_model=GlossaryCacheResponse)
-def delete_glossary_endpoint(language: str, db: Session = Depends(get_db)) -> GlossaryCacheResponse:
-    cache = get_glossary_cache_admin(db, language)
-    if cache is None:
-        raise HTTPException(status_code=404, detail="Glossary cache entry not found")
-    return soft_delete_glossary_cache(db, cache)
-
-
-@router.post("/glossary/{language}/restore", response_model=GlossaryCacheResponse)
-def restore_glossary_endpoint(language: str, db: Session = Depends(get_db)) -> GlossaryCacheResponse:
-    cache = get_glossary_cache_admin(db, language)
-    if cache is None:
-        raise HTTPException(status_code=404, detail="Glossary cache entry not found")
-    return restore_glossary_cache(db, cache)

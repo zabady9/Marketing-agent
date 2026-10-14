@@ -14,7 +14,6 @@ class Settings(BaseSettings):
     google_api_key: str
     reasoning_model: str = "gemini-2.5-pro"
     cheap_model: str = "gemini-2.5-flash"
-    max_tokens: int = 8192
 
     # Search
     tavily_api_key: str
@@ -32,18 +31,20 @@ class Settings(BaseSettings):
     debug: bool = False
     allowed_origins: str = "http://localhost:5173,http://localhost:3000"
 
-    # Deep Agents rollout — master flag gates whether chat/phase-agents/
-    # orchestrator run their deepagents-based implementation or the legacy
-    # single-shot-LLM one. Off by default; flip per-environment once each
-    # layer's own tests + the cross-layer integration tests pass.
+    # Chat turn: deepagents-based loop (True) or the hand-rolled tool loop.
     deepagents_enabled: bool = False
-    # Per-layer LLM-call budgets, tuned bottom-up (phase agents first, then
-    # orchestrator ~6x that, then chat ~orchestrator's ceiling) since the
-    # layers nest — a single shared limit would either starve the innermost
-    # layer or make the outermost layer's cap meaningless.
-    phase_model_call_limit: int = 6
-    orchestrator_model_call_limit: int = 20
     chat_model_call_limit: int = 8
+
+    # Analysis engine (app.analysis) — steps that don't depend on each other
+    # run concurrently, at most this many at once (per process). Searches are
+    # capped separately by app.tools.web_search's semaphore.
+    analysis_step_concurrency: int = 3
+    # Upper bound on steps in one plan; "comprehensive" requests use the max.
+    analysis_max_steps: int = 12
+    analysis_max_steps_comprehensive: int = 16
+    # Model calls a single step may spend on tool use (search / calculator)
+    # before it must write its blocks.
+    analysis_step_tool_rounds: int = 4
 
     # Artifact generation (DOCX/PPTX/PDF via MCP) rollout — off by default,
     # like deepagents_enabled, since it depends on three sibling Docker

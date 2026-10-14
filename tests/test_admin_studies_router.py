@@ -6,7 +6,7 @@ def test_create_get_patch_delete_restore_study(client, make_project):
 
     create_resp = client.post(
         "/api/admin/studies",
-        json={"project_id": project.id, "status": "completed", "verdict": "proceed"},
+        json={"project_id": project.id, "status": "completed", "title": "SWOT", "goal": "g"},
     )
     assert create_resp.status_code == 201
     study = create_resp.json()
@@ -17,11 +17,11 @@ def test_create_get_patch_delete_restore_study(client, make_project):
     assert get_resp.status_code == 200
 
     patch_resp = client.patch(
-        f"/api/admin/studies/{study['id']}", json={"verdict": "no-go", "confidence_score": 0.4}
+        f"/api/admin/studies/{study['id']}", json={"title": "PESTEL", "report": {"steps": []}}
     )
     assert patch_resp.status_code == 200
-    assert patch_resp.json()["verdict"] == "no-go"
-    assert patch_resp.json()["confidence_score"] == 0.4
+    assert patch_resp.json()["title"] == "PESTEL"
+    assert patch_resp.json()["report"] == {"steps": []}
 
     delete_resp = client.delete(f"/api/admin/studies/{study['id']}")
     assert delete_resp.status_code == 200
@@ -46,7 +46,7 @@ def test_list_studies_filters(client, make_project):
 
     client.post(
         "/api/admin/studies",
-        json={"project_id": project_a.id, "status": "completed", "verdict": "proceed"},
+        json={"project_id": project_a.id, "status": "completed"},
     )
     client.post(
         "/api/admin/studies",
@@ -54,7 +54,7 @@ def test_list_studies_filters(client, make_project):
     )
     client.post(
         "/api/admin/studies",
-        json={"project_id": project_b.id, "status": "completed", "verdict": "no-go"},
+        json={"project_id": project_b.id, "status": "completed"},
     )
 
     by_project = client.get("/api/admin/studies", params={"project_id": project_a.id}).json()
@@ -62,7 +62,3 @@ def test_list_studies_filters(client, make_project):
 
     by_status = client.get("/api/admin/studies", params={"status": "failed"}).json()
     assert by_status["total"] == 1
-
-    by_verdict = client.get("/api/admin/studies", params={"verdict": "no-go"}).json()
-    assert by_verdict["total"] == 1
-    assert by_verdict["items"][0]["project_id"] == project_b.id

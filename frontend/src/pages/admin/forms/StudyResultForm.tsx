@@ -27,18 +27,12 @@ function parseJsonObjectField(raw: string, fieldLabel: string): { value: Record<
 export function StudyResultForm({ mode, initial, onSubmit, onCancel }: AdminFormProps<StudyResultAdminResponse>) {
   const [projectId, setProjectId] = useState(initial?.project_id ?? '')
   const [status, setStatus] = useState<string>(initial?.status ?? 'pending')
-  const [verdict, setVerdict] = useState<string>(initial?.verdict ?? '')
-  const [confidenceScore, setConfidenceScore] = useState(
-    initial?.confidence_score !== null && initial?.confidence_score !== undefined
-      ? String(initial.confidence_score)
-      : '',
-  )
+  const [title, setTitle] = useState<string>(initial?.title ?? '')
+  const [goal, setGoal] = useState<string>(initial?.goal ?? '')
   const [errorField, setErrorField] = useState(initial?.error ?? '')
   const [startedAt, setStartedAt] = useState(initial?.started_at ?? '')
   const [completedAt, setCompletedAt] = useState(initial?.completed_at ?? '')
-  const [fatalFailures, setFatalFailures] = useState((initial?.fatal_agent_failures ?? []).join(', '))
-  const [sectionsText, setSectionsText] = useState(stringifyJsonField(initial?.sections ?? {}))
-  const [qcSummaryText, setQcSummaryText] = useState(stringifyJsonField(initial?.qc_summary))
+  const [reportText, setReportText] = useState(stringifyJsonField(initial?.report ?? {}))
 
   const [jsonError, setJsonError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -49,30 +43,20 @@ export function StudyResultForm({ mode, initial, onSubmit, onCancel }: AdminForm
     setJsonError(null)
     setError(null)
 
-    const sectionsResult = parseJsonObjectField(sectionsText, 'Sections')
-    if (sectionsResult.error) {
-      setJsonError(sectionsResult.error)
-      return
-    }
-    const qcSummaryResult = parseJsonObjectField(qcSummaryText, 'QC summary')
-    if (qcSummaryResult.error) {
-      setJsonError(qcSummaryResult.error)
+    const reportResult = parseJsonObjectField(reportText, 'Report')
+    if (reportResult.error) {
+      setJsonError(reportResult.error)
       return
     }
 
     const payload: Record<string, unknown> = {
       status,
-      verdict: verdict.trim() === '' ? null : verdict,
-      confidence_score: confidenceScore.trim() === '' ? null : Number(confidenceScore),
+      title: title.trim() === '' ? null : title,
+      goal: goal.trim() === '' ? null : goal,
       error: errorField.trim() === '' ? null : errorField,
       started_at: startedAt.trim() === '' ? null : startedAt,
       completed_at: completedAt.trim() === '' ? null : completedAt,
-      fatal_agent_failures: fatalFailures
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean),
-      sections: sectionsResult.value ?? {},
-      qc_summary: qcSummaryResult.value,
+      report: reportResult.value ?? {},
     }
     if (mode === 'create') {
       payload.project_id = projectId
@@ -113,30 +97,20 @@ export function StudyResultForm({ mode, initial, onSubmit, onCancel }: AdminForm
           />
         </div>
         <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">Verdict</label>
+          <label className="mb-1 block text-sm font-medium text-gray-700">Title</label>
           <input
             type="text"
-            value={verdict ?? ''}
-            onChange={(e) => setVerdict(e.target.value)}
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none"
           />
         </div>
-        <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">Confidence score</label>
-          <input
-            type="number"
-            step="any"
-            value={confidenceScore}
-            onChange={(e) => setConfidenceScore(e.target.value)}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none"
-          />
-        </div>
-        <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">Fatal agent failures (comma-separated)</label>
+        <div className="col-span-2">
+          <label className="mb-1 block text-sm font-medium text-gray-700">Goal</label>
           <input
             type="text"
-            value={fatalFailures}
-            onChange={(e) => setFatalFailures(e.target.value)}
+            value={goal}
+            onChange={(e) => setGoal(e.target.value)}
             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none"
           />
         </div>
@@ -171,21 +145,11 @@ export function StudyResultForm({ mode, initial, onSubmit, onCancel }: AdminForm
       </div>
 
       <div>
-        <label className="mb-1 block text-sm font-medium text-gray-700">Sections (raw JSON)</label>
+        <label className="mb-1 block text-sm font-medium text-gray-700">Report (raw JSON)</label>
         <textarea
-          value={sectionsText}
-          onChange={(e) => setSectionsText(e.target.value)}
-          rows={8}
-          className="w-full rounded-lg border border-gray-300 px-3 py-2 font-mono text-xs focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none"
-        />
-      </div>
-
-      <div>
-        <label className="mb-1 block text-sm font-medium text-gray-700">QC summary (raw JSON)</label>
-        <textarea
-          value={qcSummaryText}
-          onChange={(e) => setQcSummaryText(e.target.value)}
-          rows={6}
+          value={reportText}
+          onChange={(e) => setReportText(e.target.value)}
+          rows={12}
           className="w-full rounded-lg border border-gray-300 px-3 py-2 font-mono text-xs focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none"
         />
       </div>

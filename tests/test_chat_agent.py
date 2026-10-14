@@ -203,7 +203,7 @@ class TestChatTurnLegacyPath:
 
 
 class _FakeToolCallThenPlainReplyModel(BaseChatModel):
-    """Turn 1: calls run_market_sizing_tool. Turn 2: plain text reply. Used
+    """Turn 1: calls run_analysis_tool. Turn 2: plain text reply. Used
     to exercise a tool whose body fails with a real DB error."""
 
     _bound_tools: list = []
@@ -222,7 +222,7 @@ class _FakeToolCallThenPlainReplyModel(BaseChatModel):
             self._turn += 1
             msg = AIMessage(
                 content="",
-                tool_calls=[{"name": "run_market_sizing_tool", "args": {}, "id": "c1"}],
+                tool_calls=[{"name": "run_analysis_tool", "args": {"goal": "check the market"}, "id": "c1"}],
             )
         else:
             msg = AIMessage(content="Here's what happened.")
@@ -249,7 +249,7 @@ class TestChatTurnDbFailureRecovery:
         app.config._settings = None
         app.config.get_settings().deepagents_enabled = True
 
-        async def _broken_run_single_phase_study(db, project, phase, queue):
+        async def _broken_run_analysis(db, project_id, goal, analysis_name=None, queue=None, **kwargs):
             # A real flush failure (NOT NULL violation), exactly like the
             # sqlite3.OperationalError hit in production when a migration
             # hadn't been applied yet — this leaves db's session needing an
@@ -257,7 +257,7 @@ class TestChatTurnDbFailureRecovery:
             db.add(StudyResult(project_id=None))
             db.commit()
 
-        monkeypatch.setattr(chat_agent_module, "run_single_phase_study", _broken_run_single_phase_study)
+        monkeypatch.setattr(chat_agent_module, "run_analysis", _broken_run_analysis)
         monkeypatch.setattr(chat_agent_module, "_build_llm", lambda: _FakeToolCallThenPlainReplyModel())
         monkeypatch.setattr(chat_agent_module, "detect_single_tool_intent", _noop_tool_intent)
 
@@ -276,4 +276,79 @@ class TestChatTurnDbFailureRecovery:
 
         tool_rows = [m for m in session.messages if m.role == "tool"]
         assert len(tool_rows) == 1
-        assert "Error running run_market_sizing_tool" in tool_rows[0].content
+        assert "Error running run_analysis_tool" in tool_rows[0].content
+
+
+class _FakeParallelAnalysesModel(BaseChatModel):
+    """Turn 1: two analyses + one other tool in a single response.
+    Turn 2: plain reply."""
+
+    _bound_tools: list = []
+    _turn: int = 0
+
+    @property
+    def _llm_type(self) -> str:
+        return "fake-parallel-analyses"
+
+    def bind_tools(self, tools, **kwargs):
+        self._bound_tools = list(tools)
+        return self
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:
+        if self._turn == 0:
+            self._turn += 1
+            msg = AIMessage(
+                content="",
+                tool_calls=[
+                    {"name": "run_analysis_tool", "args": {"goal": "g", "analysis_name": "SWOT"}, "id": "a"},
+                    {"name": "remember_fact_tool", "args": {"content": "likes tea"}, "id": "b"},
+                    {"name": "run_analysis_tool", "args": {"goal": "g", "analysis_name": "PESTEL"}, "id": "c"},
+                ],
+            )
+        else:
+            msg = AIMessage(content="Done.")
+        return ChatResult(generations=[ChatGeneration(message=msg)])
+
+    async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:
+        return self._generate(messages, stop, run_manager, **kwargs)
+
+
+class TestLegacyLoopRunsAnalysesConcurrently:
+    async def test_analysis_calls_overlap_while_other_tools_still_run(
+        self, db_session, make_project, monkeypatch
+    ):
+        import asyncio
+
+        from app.analysis.engine import AnalysisRun
+
+        monkeypatch.setenv("GOOGLE_API_KEY", "test")
+        monkeypatch.setenv("TAVILY_API_KEY", "test")
+        app.config._settings = None
+        app.config.get_settings().deepagents_enabled = False
+        monkeypatch.setattr(chat_agent_module, "_build_llm", lambda: _FakeParallelAnalysesModel())
+        monkeypatch.setattr(chat_agent_module, "detect_single_tool_intent", _noop_tool_intent)
+
+        running, max_running = 0, 0
+
+        async def _fake_run(db, project_id, goal, analysis_name=None, queue=None, **kwargs):
+            nonlocal running, max_running
+            running += 1
+            max_running = max(max_running, running)
+            await asyncio.sleep(0.02)
+            running -= 1
+            return AnalysisRun(
+                study_id=f"study-{analysis_name}", status="completed", title=analysis_name,
+                answer="ok", error=None,
+            )
+
+        monkeypatch.setattr(chat_agent_module, "run_analysis", _fake_run)
+
+        project = make_project()
+        session = _make_session(db_session, project)
+        result = await chat_agent_module.run_chat_turn(db_session, project, session, "full analysis", EventQueue())
+
+        assert result.status == "complete"
+        assert max_running == 2
+        tool_rows = [m for m in session.messages if m.role == "tool"]
+        assert {m.tool_name for m in tool_rows} == {"run_analysis_tool", "remember_fact_tool"}
+        assert {m.study_id for m in tool_rows if m.study_id} == {"study-SWOT", "study-PESTEL"}

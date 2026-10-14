@@ -3,7 +3,7 @@
 // in parallel). These are separate from types.ts's public-facing types
 // because every admin response additionally carries `deleted_at`.
 
-import type { QCSummary, SectionStore, StudyRunStatus, Verdict } from './types'
+import type { AnalysisReport, StudyRunStatus } from './types'
 
 // ── Pagination envelope ─────────────────────────────────────────────────────
 
@@ -74,11 +74,9 @@ export interface StudyResultAdminResponse {
   id: string
   project_id: string
   status: StudyRunStatus
-  sections: SectionStore | Record<string, unknown>
-  verdict: Verdict | 'unavailable' | null
-  confidence_score: number | null
-  qc_summary: QCSummary | null
-  fatal_agent_failures: string[]
+  title: string | null
+  goal: string | null
+  report: AnalysisReport
   error: string | null
   started_at: string | null
   completed_at: string | null
@@ -90,11 +88,9 @@ export interface StudyResultAdminResponse {
 export interface StudyResultAdminCreate {
   project_id: string
   status?: string
-  sections?: Record<string, unknown>
-  verdict?: string | null
-  confidence_score?: number | null
-  qc_summary?: Record<string, unknown> | null
-  fatal_agent_failures?: string[]
+  title?: string | null
+  goal?: string | null
+  report?: Record<string, unknown>
   error?: string | null
   started_at?: string | null
   completed_at?: string | null
@@ -151,37 +147,3 @@ export interface MemoryEntryAdminUpdate {
   content?: string
   source?: string
 }
-
-// ── GlossaryCache (primary key is `language`, not `id`) ─────────────────────
-
-export interface GlossaryCacheAdminResponse {
-  language: string
-  terms: Record<string, string>
-  created_at: string
-  deleted_at: string | null
-}
-
-export interface GlossaryCacheAdminUpdate {
-  terms: Record<string, string>
-}
-
-// Fixed set of known glossary keys — see app/services/glossary.py::GLOSSARY_TERMS.
-export const GLOSSARY_TERM_KEYS = [
-  'TAM',
-  'SAM',
-  'SOM',
-  'ROI',
-  'NPV',
-  'IRR',
-  'CAGR',
-  'EBITDA',
-  'Capex',
-  'Opex',
-  'Break-even',
-  'KPI',
-  'MVP',
-  'SaaS',
-  'B2B',
-  'B2C',
-  'D2C',
-] as const

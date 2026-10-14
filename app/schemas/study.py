@@ -11,14 +11,9 @@ class StudyResultResponse(BaseModel):
     id: str
     project_id: str
     status: str
-    study_type: str
-    requested_phase: str | None
     title: str | None
-    sections: dict
-    verdict: str | None
-    confidence_score: float | None
-    qc_summary: dict | None
-    fatal_agent_failures: list[str]
+    goal: str | None
+    report: dict
     error: str | None
     started_at: datetime | None
     completed_at: datetime | None

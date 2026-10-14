@@ -22,13 +22,6 @@ const STUDY_STATUS_CLASSES: Record<string, string> = {
   failed: 'bg-red-100 text-red-700',
 }
 
-const VERDICT_LABELS: Record<string, string> = {
-  proceed: 'Proceed',
-  proceed_with_caution: 'Proceed with caution',
-  do_not_proceed: 'Do not proceed',
-  unavailable: 'Unavailable',
-}
-
 function StudyRow({ projectId, study }: { projectId: string; study: StudyResultResponse }) {
   return (
     <div className="flex items-center justify-between gap-4 py-2 first:pt-0 last:pb-0">
@@ -42,11 +35,6 @@ function StudyRow({ projectId, study }: { projectId: string; study: StudyResultR
           >
             {STUDY_STATUS_LABELS[study.status] ?? study.status}
           </span>
-          {study.status === 'completed' && study.verdict && (
-            <span className="text-xs text-gray-500">
-              {VERDICT_LABELS[study.verdict] ?? study.verdict}
-            </span>
-          )}
         </div>
         <p className="mt-0.5 text-xs text-gray-400">
           {formatDate(study.completed_at ?? study.started_at)}
@@ -94,7 +82,7 @@ function GeneratedReports({ projectId }: { projectId: string }) {
         <div>
           <p className="text-sm text-gray-400">No reports generated yet</p>
           <p className="mt-0.5 text-xs text-gray-400">
-            Ask the assistant in chat to run a feasibility study.
+            Ask the assistant in chat for any analysis, e.g. a feasibility study, a SWOT, or "can I compete?".
           </p>
         </div>
       )}

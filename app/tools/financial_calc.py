@@ -196,10 +196,102 @@ def calculate_cost_structure(inp: CostStructureInput) -> dict[str, Any]:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Full model — every calculation above in one call
+# ──────────────────────────────────────────────────────────────────────────────
+
+class FinancialCalcError(Exception):
+    """Raised when a required financial input is unavailable or a calc fails."""
+
+
+def run_full_financial_model(
+    *,
+    capex: float,
+    opex_monthly: float,
+    unit_price: float,
+    expected_monthly_sales: float,
+    analysis_horizon_years: int,
+) -> dict[str, dict[str, Any]]:
+    """Runs all six calculations for a simple revenue/opex/capex model, as one
+    pure function. Used by chat's what-if scenario tool (see
+    chat_agent.run_scenario_simulation_tool). Raises FinancialCalcError on
+    any calculator failure."""
+    horizon_months = analysis_horizon_years * 12
+    monthly_revenue = unit_price * expected_monthly_sales
+    annual_net = (monthly_revenue - opex_monthly) * 12
+
+    try:
+        break_even = calculate_break_even(BreakEvenInput(
+            fixed_costs=capex, unit_price=unit_price,
+            variable_cost_per_unit=0.0, monthly_unit_sales=expected_monthly_sales,
+        ))
+    except Exception as exc:
+        raise FinancialCalcError(f"calculate_break_even failed: {exc}") from exc
+
+    try:
+        roi_year_1 = calculate_roi(ROIInput(
+            total_investment=capex, net_profit=annual_net - capex,
+        ))
+    except Exception as exc:
+        raise FinancialCalcError(f"calculate_roi (year 1) failed: {exc}") from exc
+
+    try:
+        roi_year_n = calculate_roi(ROIInput(
+            total_investment=capex,
+            net_profit=annual_net * analysis_horizon_years - capex,
+        ))
+    except Exception as exc:
+        raise FinancialCalcError(
+            f"calculate_roi (year {analysis_horizon_years}) failed: {exc}"
+        ) from exc
+
+    try:
+        npv = calculate_npv(NPVInput(
+            initial_investment=capex,
+            annual_cash_flows=[annual_net] * analysis_horizon_years,
+            discount_rate=0.10,
+        ))
+    except Exception as exc:
+        raise FinancialCalcError(f"calculate_npv failed: {exc}") from exc
+
+    try:
+        sensitivity = run_sensitivity_analysis(SensitivityInput(
+            fixed_costs=capex, unit_price=unit_price, variable_cost_per_unit=0.0,
+            monthly_unit_sales=expected_monthly_sales, revenue_multipliers=[0.7, 1.0, 1.3],
+        ))
+    except Exception as exc:
+        raise FinancialCalcError(f"run_sensitivity_analysis failed: {exc}") from exc
+
+    try:
+        cash_flow = project_cash_flow(CashFlowInput(
+            monthly_revenue=monthly_revenue, monthly_opex=opex_monthly,
+            capex=capex, horizon_months=horizon_months,
+        ))
+    except Exception as exc:
+        raise FinancialCalcError(f"project_cash_flow failed: {exc}") from exc
+
+    try:
+        cost_structure = calculate_cost_structure(CostStructureInput(
+            capex=capex, opex_monthly=opex_monthly, horizon_months=horizon_months,
+        ))
+    except Exception as exc:
+        raise FinancialCalcError(f"calculate_cost_structure failed: {exc}") from exc
+
+    return {
+        "break_even": break_even,
+        "roi_year_1": roi_year_1,
+        "roi_year_n": roi_year_n,
+        "npv": npv,
+        "sensitivity": sensitivity,
+        "cash_flow": cash_flow,
+        "cost_structure": cost_structure,
+    }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Methodology text — one plain-language sentence per function, keyed by name.
 # Deterministic and static (no LLM), so it's correct by construction: it's a
 # direct restatement of the formula each function actually runs above. Consumed
-# by app/agents/financial.py::_emit_calc to populate CalcTrace.methodology.
+# alongside the calculator tools so callers can explain each formula.
 # ──────────────────────────────────────────────────────────────────────────────
 
 CALC_METHODOLOGY: dict[str, str] = {
@@ -233,7 +325,7 @@ CALC_METHODOLOGY: dict[str, str] = {
 
 # ──────────────────────────────────────────────────────────────────────────────
 # LangChain StructuredTool registry
-# (imported by FinancialModelingAgent in Phase 3)
+# (used by the analysis engine's step executor, app/analysis/steps.py)
 # ──────────────────────────────────────────────────────────────────────────────
 
 def get_financial_tools():

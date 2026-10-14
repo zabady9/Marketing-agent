@@ -10,49 +10,27 @@ class SSEEvent(StrEnum):
     LANGUAGE_DETECTED = "language_detected"
     INTAKE_WARNING = "intake_warning"
 
-    # Per-agent
-    AGENT_STARTED = "agent_started"
-    AGENT_COMPLETED = "agent_completed"
-    AGENT_FAILED = "agent_failed"
-    AGENT_WARNING = "agent_warning"
-
-    # Web search
-    SEARCH_QUERY_SENT = "search_query_sent"
-    SEARCH_RESULTS_RECEIVED = "search_results_received"
-
-    # Financial calculation
-    CALC_STARTED = "calc_started"
-    CALC_COMPLETED = "calc_completed"
-    CALC_FAILED = "calc_failed"
-
-    # Report sections (streamed incrementally)
-    SECTION_READY = "section_ready"
-
-    # Study lifecycle
+    # Analysis runs (app.analysis.engine) — every payload carries study_id,
+    # so the chat UI can attribute each event to the right run even when
+    # several run in parallel in one turn.
     STUDY_STARTED = "study_started"
-
-    # QC gate
-    QC_STARTED = "qc_started"
-    QC_FLAG_RAISED = "qc_flag_raised"
-    QC_COMPLETED = "qc_completed"
+    ANALYSIS_PLAN_READY = "analysis_plan_ready"
+    ANALYSIS_STEP_STARTED = "analysis_step_started"
+    ANALYSIS_STEP_COMPLETED = "analysis_step_completed"
+    STUDY_COMPLETED = "study_completed"
 
     # Chat
     CHAT_TOOL_ERROR = "chat_tool_error"
     CHAT_MESSAGE_DELTA = "chat_message_delta"
     CHAT_MESSAGE_COMPLETED = "chat_message_completed"
     # Fired the moment generate_chart_tool produces a validated ChartSpec —
-    # lets the frontend render the chart live, mid-turn, the same way
-    # SECTION_READY does for pipeline sections.
+    # lets the frontend render the chart live, mid-turn.
     CHAT_CHART_READY = "chat_chart_ready"
     # Fired the moment a generate_presentation_tool/generate_word_document_tool/
     # generate_pdf_report_tool/revise_artifact_tool call produces a file —
     # lets the frontend render a downloadable artifact card live, mirroring
     # CHAT_CHART_READY.
     CHAT_ARTIFACT_READY = "chat_artifact_ready"
-
-    # Deep Agent planning (write_todos) visibility — purely additive, safe
-    # for a frontend that doesn't recognize it to ignore.
-    AGENT_PLAN_UPDATED = "agent_plan_updated"
 
 
 def make_event(event: SSEEvent, data: dict[str, Any]) -> ServerSentEvent:
@@ -84,3 +62,4 @@ class EventQueue:
             if item is None:
                 break
             yield item
+

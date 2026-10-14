@@ -1,17 +1,8 @@
 """
-Tests for the split of the feasibility study into independently-callable
-chat tools (app/services/chat_agent.py::_build_tools). Previously a single
-run_pipeline_phase_tool(phase=...) required the model to both (a) choose the
-narrow tool over run_feasibility_study_tool AND (b) correctly fill in a
-`phase` argument — two separate judgment calls, either of which failing
-meant the full pipeline ran instead of just the requested capability. Now
-each capability (market sizing, competitive, financial, risk, synthesis) has
-its own zero-argument tool: choosing the tool IS choosing the phase, with no
-argument-filling step left to get wrong.
-
-These tests exercise each tool directly (no LLM involved) and assert it
-calls run_single_phase_study with exactly the right phase — and nothing else
-(in particular, never run_feasibility_study, the full-pipeline entry point).
+Tests for the chat tools in app/services/chat_agent.py::_build_tools — the
+single analysis tool (every analysis goes through run_analysis_tool),
+explain_figure_tool over report blocks, the what-if scenario tool, and the
+artifact-generation tools. No real LLM or network calls.
 """
 
 from unittest.mock import AsyncMock
@@ -20,6 +11,7 @@ import app.config
 import app.services.chat_agent as chat_agent_module
 from app.models import Artifact, ChatMessage, ChatSession
 from app.services.artifact_generation import ArtifactFile, ArtifactGenerationError
+from app.analysis.engine import AnalysisRun
 from app.sse import EventQueue
 
 
@@ -40,64 +32,134 @@ def _build_tools(db_session, project, session):
     return {t.name: t for t in tools}
 
 
-class TestCapabilityToolsAreIndependent:
-    async def test_each_capability_tool_calls_single_phase_study_with_its_own_phase_only(
+def _report(blocks: list[dict]) -> dict:
+    return {
+        "title": "Feasibility of the coffee subscription",
+        "steps": [
+            {"id": "s1", "title": "Unit economics", "status": "completed", "summary": "Break-even in 8 months.",
+             "blocks": blocks},
+        ],
+    }
+
+
+class TestRunAnalysisTool:
+    async def test_passes_goal_name_and_scope_through_and_links_the_study(
         self, db_session, make_project, monkeypatch
     ):
         project = make_project()
         session = _make_session(db_session, project)
-
-        single_phase_mock = AsyncMock()
-        single_phase_mock.return_value.status = "completed"
-        single_phase_mock.return_value.id = "study-x"
-        single_phase_mock.return_value.sections = {
-            "market_overview": {}, "competitive_landscape": {}, "financial_feasibility": {},
-            "risk_assessment": {}, "executive_summary": {},
-        }
-        full_study_mock = AsyncMock()
-        monkeypatch.setattr(chat_agent_module, "run_single_phase_study", single_phase_mock)
-        monkeypatch.setattr(chat_agent_module, "run_feasibility_study", full_study_mock)
+        run_mock = AsyncMock(
+            return_value=AnalysisRun(study_id="study-c", status="completed", title="SWOT", answer="Go niche.", error=None)
+        )
+        monkeypatch.setattr(chat_agent_module, "run_analysis", run_mock)
 
         tools = _build_tools(db_session, project, session)
+        content = await tools["run_analysis_tool"].ainvoke(
+            {"goal": "find strengths", "analysis_name": "SWOT", "comprehensive": True}
+        )
 
-        expected = {
-            "run_market_sizing_tool": "market_sizing",
-            "run_competitive_analysis_tool": "competitive",
-            "run_financial_analysis_tool": "financial",
-            "run_risk_analysis_tool": "risk",
-            "run_synthesis_tool": "synthesis",
-        }
-        for tool_name, expected_phase in expected.items():
-            single_phase_mock.reset_mock()
-            await tools[tool_name].ainvoke({})
-            single_phase_mock.assert_awaited_once()
-            called_phase = single_phase_mock.await_args.args[2]
-            assert called_phase == expected_phase
-            # The defining property this test protects: calling one
-            # capability's tool NEVER falls through to the full pipeline.
-            full_study_mock.assert_not_awaited()
+        assert run_mock.await_args.args[1:4] == (project.id, "find strengths", "SWOT")
+        assert run_mock.await_args.kwargs["comprehensive"] is True
+        assert "Go niche." in content
+        assert session.messages[-1].study_id == "study-c"
 
-    async def test_full_study_tool_calls_run_feasibility_study_not_single_phase(
+    async def test_failed_run_returns_summary_instead_of_raising(self, db_session, make_project, monkeypatch):
+        project = make_project()
+        session = _make_session(db_session, project)
+        run_mock = AsyncMock(
+            return_value=AnalysisRun(study_id="study-d", status="failed", title=None, answer=None, error="quota")
+        )
+        monkeypatch.setattr(chat_agent_module, "run_analysis", run_mock)
+
+        tools = _build_tools(db_session, project, session)
+        content = await tools["run_analysis_tool"].ainvoke({"goal": "can I compete?"})
+
+        assert run_mock.await_args.args[3] is None
+        assert "failed: quota" in content
+
+    async def test_links_the_run_to_the_chat_at_start_then_finishes_the_same_row(
         self, db_session, make_project, monkeypatch
     ):
         project = make_project()
         session = _make_session(db_session, project)
+        seen_mid_run: list[tuple[str, str | None]] = []
 
-        full_study_mock = AsyncMock()
-        full_study_mock.return_value.status = "completed"
-        full_study_mock.return_value.id = "study-y"
-        full_study_mock.return_value.verdict = "proceed"
-        full_study_mock.return_value.confidence_score = 0.9
-        full_study_mock.return_value.sections = {"market_overview": {}}
-        single_phase_mock = AsyncMock()
-        monkeypatch.setattr(chat_agent_module, "run_feasibility_study", full_study_mock)
-        monkeypatch.setattr(chat_agent_module, "run_single_phase_study", single_phase_mock)
+        async def _fake_run(db, project_id, goal, analysis_name=None, queue=None, *, on_started=None, **kw):
+            on_started("study-live")
+            # While the run is going, a refreshed page must already find the link.
+            rows = [m for m in session.messages if m.role == "tool"]
+            seen_mid_run.extend((m.status, m.study_id) for m in rows)
+            return AnalysisRun(study_id="study-live", status="completed", title="T", answer="A", error=None)
+
+        monkeypatch.setattr(chat_agent_module, "run_analysis", _fake_run)
+        tools = _build_tools(db_session, project, session)
+        await tools["run_analysis_tool"].ainvoke({"goal": "g"})
+
+        assert seen_mid_run == [("pending", "study-live")]
+        tool_rows = [m for m in session.messages if m.role == "tool"]
+        assert len(tool_rows) == 1
+        assert (tool_rows[0].status, tool_rows[0].study_id) == ("complete", "study-live")
+        assert "A" in tool_rows[0].content
+
+    def test_no_hard_coded_feasibility_tools_remain(self, db_session, make_project):
+        project = make_project()
+        session = _make_session(db_session, project)
+        names = set(_build_tools(db_session, project, session))
+        assert "run_analysis_tool" in names
+        assert not {n for n in names if "feasibility" in n or n.startswith("run_market") or "synthesis" in n}
+
+
+class TestExplainFigureTool:
+    async def test_finds_the_block_that_mentions_the_figure(self, db_session, make_project):
+        from app.models import StudyResult
+
+        project = make_project()
+        session = _make_session(db_session, project)
+        db_session.add(
+            StudyResult(
+                project_id=project.id, status="completed", title="Coffee", goal="g",
+                report=_report([
+                    {"type": "stats", "items": [{"label": "Break-even", "value": "8", "unit": "months", "basis": "calculated"}],
+                     "citations": []},
+                    {"type": "text", "markdown": "Unrelated narrative."},
+                ]),
+            )
+        )
+        db_session.commit()
+        db_session.refresh(project)
 
         tools = _build_tools(db_session, project, session)
-        await tools["run_feasibility_study_tool"].ainvoke({})
+        content = await tools["explain_figure_tool"].ainvoke({"figure_description": "break-even"})
 
-        full_study_mock.assert_awaited_once()
-        single_phase_mock.assert_not_awaited()
+        assert "Unit economics" in content
+        assert "calculated" in content
+        assert "Unrelated narrative" not in content
+
+    async def test_reports_available_steps_when_nothing_matches(self, db_session, make_project):
+        from app.models import StudyResult
+
+        project = make_project()
+        session = _make_session(db_session, project)
+        db_session.add(StudyResult(project_id=project.id, status="completed", title="Coffee", report=_report([])))
+        db_session.commit()
+        db_session.refresh(project)
+
+        tools = _build_tools(db_session, project, session)
+        content = await tools["explain_figure_tool"].ainvoke({"figure_description": "NPV"})
+
+        assert "Couldn't find" in content
+        assert "Unit economics" in content
+
+
+class TestScenarioToolAfterMove:
+    async def test_runs_on_the_relocated_financial_model(self, db_session, make_project):
+        project = make_project()
+        session = _make_session(db_session, project)
+        tools = _build_tools(db_session, project, session)
+
+        content = await tools["run_scenario_simulation_tool"].ainvoke({"unit_price": 20.0})
+
+        assert "Error running" not in content
 
 
 class TestArtifactGenerationTools:
@@ -198,7 +260,7 @@ class TestArtifactGenerationTools:
 
         study = StudyResult(
             project_id=project.id, status="completed", title="T",
-            sections={"executive_summary": {"data": {"verdict": "proceed"}}},
+            report=_report([{"type": "text", "markdown": "Looks good."}]),
         )
         db_session.add(study)
         db_session.commit()

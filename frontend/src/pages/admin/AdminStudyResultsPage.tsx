@@ -15,9 +15,9 @@ const config: AdminEntityConfig<StudyResultAdminResponse> = {
   columns: [
     { header: 'ID', render: (row) => <span className="font-mono text-xs">{row.id}</span> },
     { header: 'Project ID', render: (row) => <span className="font-mono text-xs">{row.project_id}</span> },
+    { header: 'Title', render: (row) => row.title ?? '—' },
     { header: 'Status', render: (row) => row.status },
-    { header: 'Verdict', render: (row) => row.verdict ?? '—' },
-    { header: 'Confidence', render: (row) => row.confidence_score ?? '—' },
+    { header: 'Steps', render: (row) => row.report?.steps?.length ?? 0 },
     { header: 'Created', render: (row) => new Date(row.created_at).toLocaleString() },
   ],
   list: listAdminStudies,
