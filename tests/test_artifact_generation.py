@@ -363,3 +363,60 @@ class TestWriteArtifactFileAtomicity:
             )
         final_path = os.path.join(storage_dir, "proj-1", "art-5.pptx")
         assert not os.path.exists(final_path)
+
+
+class TestPresentonKeyRecovery:
+    """Presenton loses its API keys on every restart (its database lives in
+    the container); a 401 must mint a fresh key and retry, not fail."""
+
+    async def test_401_mints_a_new_key_and_retries_once(self, monkeypatch, db_session):
+        import httpx
+
+        import app.services.artifact_generation as ag
+        from app.services import presenton_auth
+
+        monkeypatch.setattr(presenton_auth, "_current_key", None)
+        used_keys = []
+
+        async def _once(outline, *, presenton_api_key, **kw):
+            used_keys.append(presenton_api_key)
+            if presenton_api_key == "fresh":
+                return ag.ArtifactFile(path="p", filename="f.pptx", size_bytes=1)
+            req = httpx.Request("POST", "http://presenton/mcp")
+            err = httpx.HTTPStatusError("401 Unauthorized", request=req, response=httpx.Response(401, request=req))
+            raise ExceptionGroup("unhandled errors in a TaskGroup", [err])
+
+        async def _refresh(rejected):
+            assert rejected == used_keys[0]  # the key that was just rejected
+            presenton_auth._current_key = "fresh"
+            return "fresh"
+
+        monkeypatch.setattr(ag, "_generate_pptx_once", _once)
+        monkeypatch.setattr(presenton_auth, "refresh_key", _refresh)
+
+        result = await ag.generate_pptx(
+            ag.PresentationOutline(title="T", slides=[{"heading": "S", "bullets": ["b"]}]),
+            storage_dir="x", shared_output_dir="y", project_id="p", artifact_id="a",
+        )
+
+        assert result.filename == "f.pptx"
+        assert len(used_keys) == 2 and used_keys[1] == "fresh"
+
+    async def test_other_errors_are_not_retried(self, monkeypatch, db_session):
+        import app.services.artifact_generation as ag
+
+        calls = []
+
+        async def _once(outline, **kw):
+            calls.append(1)
+            raise ag.ArtifactGenerationError("presenton job failed")
+
+        monkeypatch.setattr(ag, "_generate_pptx_once", _once)
+        try:
+            await ag.generate_pptx(
+                ag.PresentationOutline(title="T", slides=[{"heading": "S", "bullets": ["b"]}]),
+                storage_dir="x", shared_output_dir="y", project_id="p", artifact_id="a",
+            )
+        except ag.ArtifactGenerationError:
+            pass
+        assert calls == [1]

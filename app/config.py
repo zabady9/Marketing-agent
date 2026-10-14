@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     artifact_storage_dir: str = "./generated_artifacts"
     presenton_url: str = "http://presenton:80"
     presenton_api_key: str = ""
+    # Presenton's bootstrap admin — lets the backend mint a fresh API key when
+    # Presenton restarts and forgets the old one (see app.services.presenton_auth).
+    presenton_admin_username: str = "admin"
+    presenton_admin_password: str = ""
     mcp_office_docs_url: str = "http://mcp-office-docs:8958"
     mcp_office_docs_api_key: str = ""
     mcp_pdf_url: str = "http://mcp-pdf:3010"

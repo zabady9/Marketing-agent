@@ -38,8 +38,10 @@ _ALLOWED_TOOLS: dict[str, frozenset[str]] = {
 }
 
 
-@lru_cache(maxsize=1)
-def _client() -> MultiServerMCPClient:
+@lru_cache(maxsize=4)
+def _client(presenton_api_key: str) -> MultiServerMCPClient:
+    # Keyed on Presenton's key: when it's re-minted (see presenton_auth), a
+    # new client with the new Authorization header is built.
     settings = get_settings()
     return MultiServerMCPClient(
         {
@@ -47,8 +49,8 @@ def _client() -> MultiServerMCPClient:
                 "transport": "streamable_http",
                 "url": f"{settings.presenton_url}/mcp",
                 "headers": (
-                    {"Authorization": f"Bearer {settings.presenton_api_key}"}
-                    if settings.presenton_api_key
+                    {"Authorization": f"Bearer {presenton_api_key}"}
+                    if presenton_api_key
                     else None
                 ),
             },
@@ -80,7 +82,9 @@ async def get_allowed_tool(server_name: str, tool_name: str) -> BaseTool:
         raise MCPToolNotAllowedError(
             f"'{tool_name}' is not on the allowlist for MCP server '{server_name}'."
         )
-    tools = await _client().get_tools(server_name=server_name)
+    from app.services.presenton_auth import current_key
+
+    tools = await _client(current_key()).get_tools(server_name=server_name)
     for candidate in tools:
         if candidate.name == tool_name:
             return candidate

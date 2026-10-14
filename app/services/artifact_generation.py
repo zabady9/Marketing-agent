@@ -42,7 +42,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from app.config import get_settings
 from app.models.artifact import Artifact
 from app.schemas.artifact import DocumentOutline, PresentationOutline, SlideContent
-from app.services import upload_storage
+from app.services import presenton_auth, upload_storage
 from app.services.mcp_clients import get_allowed_tool
 
 logger = logging.getLogger(__name__)
@@ -236,6 +236,36 @@ async def _download_presenton_file(url: str, *, presenton_api_key: str) -> bytes
 
 
 async def generate_pptx(
+    outline: PresentationOutline,
+    *,
+    storage_dir: str,
+    shared_output_dir: str,
+    project_id: str,
+    artifact_id: str,
+    presenton_api_key: str = "",
+) -> ArtifactFile:
+    """Presenton forgets its API keys whenever it restarts; on a 401 this
+    mints a fresh key (presenton_auth) and tries once more. Callers pass the
+    configured key; once a newer one has been minted, that one is used."""
+    configured = get_settings().presenton_api_key
+    key = presenton_auth.current_key() if presenton_api_key in ("", configured) else presenton_api_key
+    try:
+        return await _generate_pptx_once(
+            outline, storage_dir=storage_dir, shared_output_dir=shared_output_dir,
+            project_id=project_id, artifact_id=artifact_id, presenton_api_key=key,
+        )
+    except BaseException as exc:
+        if not presenton_auth.is_unauthorized(exc):
+            raise
+        logger.warning("Presenton rejected its API key; minting a new one and retrying")
+        key = await presenton_auth.refresh_key(key)
+        return await _generate_pptx_once(
+            outline, storage_dir=storage_dir, shared_output_dir=shared_output_dir,
+            project_id=project_id, artifact_id=artifact_id, presenton_api_key=key,
+        )
+
+
+async def _generate_pptx_once(
     outline: PresentationOutline,
     *,
     storage_dir: str,
