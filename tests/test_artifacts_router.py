@@ -58,3 +58,35 @@ class TestDownloadArtifactEndpoint:
 
         resp = client.get(f"/api/projects/{project_b.id}/chat/artifacts/{artifact.id}/download")
         assert resp.status_code == 404
+
+
+class TestListArtifactsEndpoint:
+    def _artifact(self, project_id, title, fmt="docx", **kw):
+        return Artifact(
+            project_id=project_id, format=fmt, title=title, filename=f"{title}.{fmt}",
+            storage_path="/nonexistent", size_bytes=10, spec_json={}, **kw,
+        )
+
+    def test_lists_this_projects_files_newest_first_without_deleted(self, client, db_session, make_project):
+        from datetime import datetime, timedelta
+
+        project, other = make_project(), make_project("Other")
+        now = datetime.utcnow()
+        db_session.add_all([
+            self._artifact(project.id, "Old", created_at=now - timedelta(hours=1)),
+            self._artifact(project.id, "New", fmt="pdf", created_at=now),
+            self._artifact(project.id, "Gone", deleted_at=now),
+            self._artifact(other.id, "Elsewhere"),
+        ])
+        db_session.commit()
+
+        resp = client.get(f"/api/projects/{project.id}/chat/artifacts")
+
+        assert resp.status_code == 200
+        items = resp.json()
+        assert [i["title"] for i in items] == ["New", "Old"]
+        assert items[0]["format"] == "pdf" and "created_at" in items[0]
+        assert "storage_path" not in items[0]
+
+    def test_404_for_unknown_project(self, client):
+        assert client.get("/api/projects/nope/chat/artifacts").status_code == 404

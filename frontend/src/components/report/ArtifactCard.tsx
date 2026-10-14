@@ -1,32 +1,24 @@
 import { useState } from 'react'
-import { downloadChatArtifact } from '../../api'
+import { saveChatArtifact } from '../../api'
 import { SectionCardShell } from './primitives'
 import type { ArtifactSummary } from '../../types'
 
-const FORMAT_LABEL: Record<ArtifactSummary['format'], string> = {
+export const FORMAT_LABEL: Record<ArtifactSummary['format'], string> = {
   docx: 'Word Document',
   pptx: 'PowerPoint',
   pdf: 'PDF',
 }
 
-const FORMAT_ICON: Record<ArtifactSummary['format'], string> = {
+export const FORMAT_ICON: Record<ArtifactSummary['format'], string> = {
   docx: '📄',
   pptx: '📊',
   pdf: '📕',
 }
 
-function formatSize(bytes: number): string {
+export function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
-
-// A safe, human-readable filename for the client-side download — the
-// backend independently derives its own from the same title for the rare
-// case a file is opened directly via the download URL.
-function downloadFilename(artifact: ArtifactSummary): string {
-  const slug = artifact.title.replace(/[\\/:*?"<>|]/g, '_').trim() || 'artifact'
-  return `${slug}.${artifact.format}`
 }
 
 export function ArtifactCard({ projectId, artifact }: { projectId: string; artifact: ArtifactSummary }) {
@@ -37,13 +29,7 @@ export function ArtifactCard({ projectId, artifact }: { projectId: string; artif
     setDownloading(true)
     setError(null)
     try {
-      const blob = await downloadChatArtifact(projectId, artifact)
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = downloadFilename(artifact)
-      a.click()
-      URL.revokeObjectURL(url)
+      await saveChatArtifact(projectId, artifact)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to download the file.')
     } finally {

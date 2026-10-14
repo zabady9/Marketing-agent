@@ -12,6 +12,7 @@ from sse_starlette.sse import EventSourceResponse
 from app.config import get_settings
 from app.db import SessionLocal, get_db
 from app.models import Artifact, ChatAttachment, StudyResult
+from app.schemas.artifact import ArtifactListItem
 from app.schemas.chat import ChatMessageCreate, ChatMessageResponse, ChatSessionResponse
 from app.schemas.export import ChatExportRequest
 from app.schemas.project import (
@@ -185,6 +186,20 @@ _UNSAFE_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|]')
 def _safe_download_filename(title: str, fmt: str) -> str:
     slug = _UNSAFE_FILENAME_CHARS.sub("_", title).strip() or "artifact"
     return f"{slug}.{fmt}"
+
+
+@router.get("/{project_id}/chat/artifacts", response_model=list[ArtifactListItem])
+def list_artifacts_endpoint(project_id: str, db: Session = Depends(get_db)) -> list[ArtifactListItem]:
+    """Every file generated in this project (any chat), newest first."""
+    if get_project(db, project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    rows = (
+        db.query(Artifact)
+        .filter(Artifact.project_id == project_id, Artifact.deleted_at.is_(None))
+        .order_by(Artifact.created_at.desc())
+        .all()
+    )
+    return [ArtifactListItem.model_validate(a) for a in rows]
 
 
 @router.get("/{project_id}/chat/artifacts/{artifact_id}/download")

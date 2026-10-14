@@ -4,6 +4,7 @@ import {
   createChatSession,
   GenerationInProgressError,
   listChatMessages,
+  listArtifacts,
   listChatSessions,
   listStudies,
   resumeChatMessageStream,
@@ -22,6 +23,7 @@ import {
   usePendingAttachments,
 } from '../components/chat/attachments'
 import type {
+  ArtifactListItem,
   ArtifactSummary,
   AttachmentSummary,
   ChatArtifactReadyPayload,
@@ -146,6 +148,7 @@ export function ChatPage() {
   const navigate = useNavigate()
   const [sessions, setSessions] = useState<ChatSessionRecord[]>([])
   const [studies, setStudies] = useState<StudyResultResponse[]>([])
+  const [files, setFiles] = useState<ArtifactListItem[]>([])
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [transcript, setTranscript] = useState<TranscriptItem[]>([])
   const [loadingHistory, setLoadingHistory] = useState(true)
@@ -192,6 +195,12 @@ export function ChatPage() {
         setStudies(data)
       })
       .catch(() => {})
+    listArtifacts(projectId)
+      .then((data) => {
+        if (cancelled) return
+        setFiles(data)
+      })
+      .catch(() => {})
     return () => {
       cancelled = true
     }
@@ -200,6 +209,11 @@ export function ChatPage() {
   function refreshStudies() {
     if (!projectId) return
     listStudies(projectId).then(setStudies).catch(() => {})
+  }
+
+  function refreshFiles() {
+    if (!projectId) return
+    listArtifacts(projectId).then(setFiles).catch(() => {})
   }
 
   useEffect(() => {
@@ -288,6 +302,7 @@ export function ChatPage() {
           ...prev,
           { kind: 'artifact', artifact: payload.artifact, messageId: payload.message_id },
         ])
+        refreshFiles()
       } else if (evt.event === 'chat_message_delta') {
         const payload = evt.data as ChatMessageDeltaPayload
         setTranscript((prev) => {
@@ -464,6 +479,7 @@ export function ChatPage() {
           sessionId={sessionId}
           sessions={sessions}
           studies={studies}
+          files={files}
           open={sidebarOpen}
           onClose={() => setSidebarOpen(false)}
           onNewChat={handleNewChat}

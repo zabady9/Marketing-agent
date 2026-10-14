@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -51,3 +52,9 @@ class ArtifactSummary(BaseModel):
     title: str
     filename: str
     size_bytes: int
+
+
+class ArtifactListItem(ArtifactSummary):
+    """One row of a project's generated-files list (the chat sidebar)."""
+
+    created_at: datetime

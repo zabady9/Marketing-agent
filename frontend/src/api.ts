@@ -1,4 +1,5 @@
 import type {
+  ArtifactListItem,
   ArtifactSummary,
   AttachmentSummary,
   BusinessProfile,
@@ -116,6 +117,27 @@ export async function downloadChatArtifact(projectId: string, artifact: Artifact
     throw new Error(await errorMessageFor(res))
   }
   return res.blob()
+}
+
+// Every file generated in this project, newest first (the sidebar list).
+export async function listArtifacts(projectId: string): Promise<ArtifactListItem[]> {
+  const res = await fetch(`${BASE}/api/projects/${projectId}/chat/artifacts`)
+  if (!res.ok) {
+    throw new Error(await errorMessageFor(res))
+  }
+  return res.json()
+}
+
+// Downloads a generated file and saves it under a readable name. The
+// browser's `download` attribute (not Content-Disposition) names the file.
+export async function saveChatArtifact(projectId: string, artifact: ArtifactSummary): Promise<void> {
+  const blob = await downloadChatArtifact(projectId, artifact)
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${artifact.title.replace(/[\\/:*?"<>|]/g, '_').trim() || 'artifact'}.${artifact.format}`
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
 function attachmentsUrl(projectId: string, sessionId: string): string {

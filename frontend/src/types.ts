@@ -65,6 +65,11 @@ export interface ArtifactSummary {
   size_bytes: number
 }
 
+// A row of the project's generated-files list (GET .../chat/artifacts).
+export interface ArtifactListItem extends ArtifactSummary {
+  created_at: string
+}
+
 // Matches app/schemas/attachment.py::AttachmentSummary — a user-uploaded
 // chat file. `kind` says how the agent sees it: as the file itself
 // (gemini_file), as extracted text, or by name/type only (metadata_only).

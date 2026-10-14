@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
+import { saveChatArtifact } from '../../api'
 import { formatDate, getStudyTitle } from '../../lib/format'
-import type { ChatSessionRecord, StudyResultResponse } from '../../types'
+import { FORMAT_ICON, FORMAT_LABEL, formatSize } from '../report/ArtifactCard'
+import type { ArtifactListItem, ChatSessionRecord, StudyResultResponse } from '../../types'
 
 // Recent chats shown before "Show all", so Previous studies stays visible
 // even in a project with many chats.
@@ -14,14 +16,48 @@ const STUDY_STATUS_DOT: Record<string, string> = {
   failed: 'bg-red-500',
 }
 
-// ChatGPT/Claude-style left rail: the project's chats on top, its previous
-// studies below, so both are one click away without leaving the chat. On
-// small screens it renders as an off-canvas drawer toggled by the parent.
+function GeneratedFileRow({ projectId, file }: { projectId: string; file: ArtifactListItem }) {
+  const [state, setState] = useState<'idle' | 'downloading' | 'error'>('idle')
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={() => {
+          setState('downloading')
+          saveChatArtifact(projectId, file)
+            .then(() => setState('idle'))
+            .catch(() => setState('error'))
+        }}
+        disabled={state === 'downloading'}
+        className="flex w-full items-start gap-2 rounded-md border border-transparent px-2.5 py-2 text-start text-xs text-gray-600 hover:bg-gray-50 disabled:opacity-60 transition-colors"
+        title={`Download ${file.title} (${FORMAT_LABEL[file.format]})`}
+      >
+        <span className="shrink-0 leading-4" aria-hidden="true">{FORMAT_ICON[file.format]}</span>
+        <span className="min-w-0">
+          <span dir="auto" className="block truncate">{file.title}</span>
+          <span className="block text-[10px] text-gray-400">
+            {state === 'downloading'
+              ? 'Downloading…'
+              : state === 'error'
+                ? <span className="text-red-500">Download failed, click to retry</span>
+                : `${file.format.toUpperCase()} · ${formatSize(file.size_bytes)} · ${formatDate(file.created_at)}`}
+          </span>
+        </span>
+      </button>
+    </li>
+  )
+}
+
+// ChatGPT/Claude-style left rail: the project's chats, its previous studies
+// and the files generated in it, each one click away without leaving the
+// chat. On small screens it renders as an off-canvas drawer toggled by the
+// parent.
 export function ChatSidebar({
   projectId,
   sessionId,
   sessions,
   studies,
+  files,
   open,
   onClose,
   onNewChat,
@@ -30,6 +66,7 @@ export function ChatSidebar({
   sessionId?: string
   sessions: ChatSessionRecord[]
   studies: StudyResultResponse[]
+  files: ArtifactListItem[]
   open: boolean
   onClose: () => void
   onNewChat: () => void
@@ -130,6 +167,21 @@ export function ChatSidebar({
                     </li>
                   )
                 })}
+              </ul>
+            )}
+          </section>
+
+          <section>
+            <p className="px-2.5 mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+              Generated files
+            </p>
+            {files.length === 0 || !projectId ? (
+              <p className="px-2.5 text-xs text-gray-400">No files yet. Ask for a Word, PowerPoint or PDF.</p>
+            ) : (
+              <ul className="space-y-1">
+                {files.map((file) => (
+                  <GeneratedFileRow key={file.id} projectId={projectId} file={file} />
+                ))}
               </ul>
             )}
           </section>
