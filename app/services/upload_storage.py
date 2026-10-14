@@ -83,6 +83,52 @@ def open_read(storage_path: str) -> BinaryIO:
     return open(storage_path, "rb")
 
 
+def _is_local_path(storage_path: str) -> bool:
+    # Rows written before generated files moved to GCS hold a local path
+    # (e.g. "./generated_artifacts/..."); GCS object names are never absolute
+    # or dot-relative.
+    return storage_path.startswith(("/", "./", "../"))
+
+
+def generated_file_path(project_id: str, artifact_id: str, ext: str) -> str:
+    """Where a generated DOCX/PPTX/PDF is kept — a GCS object in production,
+    so it survives redeploys (Cloud Run's disk is wiped on every new
+    revision); a local path in dev."""
+    settings = get_settings()
+    if settings.upload_storage == "gcs":
+        return f"generated/{project_id}/{artifact_id}.{ext}"
+    return str(Path(settings.artifact_storage_dir) / project_id / f"{artifact_id}.{ext}")
+
+
+def write_bytes(storage_path: str, data: bytes, content_type: str) -> None:
+    if get_settings().upload_storage == "gcs" and not _is_local_path(storage_path):
+        _gcs_bucket().blob(storage_path).upload_from_string(data, content_type=content_type)
+        return
+    os.makedirs(os.path.dirname(storage_path) or ".", exist_ok=True)
+    tmp_path = f"{storage_path}.tmp"
+    try:
+        with open(tmp_path, "wb") as f:
+            f.write(data)
+        os.replace(tmp_path, storage_path)
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
+
+
+def read_bytes(storage_path: str) -> bytes | None:
+    """The whole file, or None if it no longer exists (e.g. a legacy local
+    file wiped by a redeploy). Generated files are small (KB-MB)."""
+    try:
+        if get_settings().upload_storage == "gcs" and not _is_local_path(storage_path):
+            blob = _gcs_bucket().get_blob(storage_path)
+            return None if blob is None else blob.download_as_bytes()
+        with open(storage_path, "rb") as f:
+            return f.read()
+    except FileNotFoundError:
+        return None
+
+
 def delete(storage_path: str) -> None:
     if get_settings().upload_storage == "gcs":
         blob = _gcs_bucket().blob(storage_path)

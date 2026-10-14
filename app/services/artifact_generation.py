@@ -39,8 +39,10 @@ import httpx
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
+from app.config import get_settings
 from app.models.artifact import Artifact
 from app.schemas.artifact import DocumentOutline, PresentationOutline, SlideContent
+from app.services import upload_storage
 from app.services.mcp_clients import get_allowed_tool
 
 logger = logging.getLogger(__name__)
@@ -172,21 +174,20 @@ async def _extract_bytes_and_filename(message: ToolMessage, *, shared_output_dir
         return f.read(), filename
 
 
+_MIME_BY_EXT = {
+    "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "pdf": "application/pdf",
+}
+
+
 def _write_artifact_file(data: bytes, *, storage_dir: str, project_id: str, artifact_id: str, ext: str) -> ArtifactFile:
-    project_dir = os.path.join(storage_dir, project_id)
-    os.makedirs(project_dir, exist_ok=True)
-    filename = f"{artifact_id}.{ext}"
-    path = os.path.join(project_dir, filename)
-    tmp_path = f"{path}.tmp"
-    try:
-        with open(tmp_path, "wb") as f:
-            f.write(data)
-        os.replace(tmp_path, path)
-    except Exception:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
-        raise
-    return ArtifactFile(path=path, filename=filename, size_bytes=len(data))
+    # storage_dir is kept for call-site compatibility; the location now comes
+    # from upload_storage (GCS in production, so files survive redeploys).
+    del storage_dir
+    path = upload_storage.generated_file_path(project_id, artifact_id, ext)
+    upload_storage.write_bytes(path, data, _MIME_BY_EXT[ext])
+    return ArtifactFile(path=path, filename=f"{artifact_id}.{ext}", size_bytes=len(data))
 
 
 async def _poll_presenton_job(task_id: str) -> dict:
@@ -327,6 +328,31 @@ async def generate_pdf(
     return _write_artifact_file(
         data, storage_dir=storage_dir, project_id=project_id, artifact_id=artifact_id, ext="pdf"
     )
+
+
+async def regenerate_artifact_file(artifact: Artifact, *, presenton_api_key: str = "") -> ArtifactFile:
+    """Rebuild a generated file from the outline stored with it — used when
+    the bytes are gone (files kept on Cloud Run's local disk before the move
+    to GCS were wiped by redeploys). Same drivers, same artifact id, so the
+    new file takes the old one's place."""
+    settings = get_settings()
+    common = dict(
+        storage_dir=settings.artifact_storage_dir,
+        shared_output_dir=settings.mcp_shared_output_dir,
+        project_id=artifact.project_id,
+        artifact_id=artifact.id,
+    )
+    if artifact.format == "pptx":
+        return await generate_pptx(
+            PresentationOutline.model_validate(artifact.spec_json), presenton_api_key=presenton_api_key, **common
+        )
+    outline = DocumentOutline.model_validate(artifact.spec_json)
+    if artifact.format == "docx":
+        return await generate_docx(outline, **common)
+    # PDFs store one section wrapping the full report markdown (see
+    # generate_pdf_report_tool); _outline_to_markdown would add a heading.
+    markdown = "\n\n".join(s.body for s in outline.sections) if len(outline.sections) == 1 else _outline_to_markdown(outline)
+    return await generate_pdf(markdown, outline.title, **common)
 
 
 async def revise_artifact(

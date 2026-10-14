@@ -90,3 +90,69 @@ class TestListArtifactsEndpoint:
 
     def test_404_for_unknown_project(self, client):
         assert client.get("/api/projects/nope/chat/artifacts").status_code == 404
+
+
+class TestDownloadRebuildsMissingFiles:
+    """Files kept on Cloud Run's local disk were wiped by redeploys; a download
+    of such a file rebuilds it from its stored outline instead of failing."""
+
+    def _missing(self, db_session, project, fmt="docx"):
+        artifact = Artifact(
+            project_id=project.id, format=fmt, title="Report", filename=f"x.{fmt}",
+            storage_path="./generated_artifacts/gone/x." + fmt, size_bytes=1,
+            spec_json={"title": "Report", "sections": [{"heading": "Report", "body": "# Hi"}]},
+        )
+        db_session.add(artifact)
+        db_session.commit()
+        return artifact
+
+    def test_missing_file_is_rebuilt_stored_and_served(self, client, db_session, make_project, monkeypatch, tmp_path):
+        import app.routers.projects as projects_module
+        from app.services.artifact_generation import ArtifactFile
+
+        project = make_project()
+        artifact = self._missing(db_session, project)
+        rebuilt = tmp_path / "rebuilt.docx"
+        rebuilt.write_bytes(b"PK\x03\x04rebuilt")
+        calls = []
+
+        async def _fake_regenerate(a, **kw):
+            calls.append(a.id)
+            return ArtifactFile(path=str(rebuilt), filename="rebuilt.docx", size_bytes=11)
+
+        monkeypatch.setattr(projects_module, "regenerate_artifact_file", _fake_regenerate)
+
+        resp = client.get(f"/api/projects/{project.id}/chat/artifacts/{artifact.id}/download")
+        assert resp.status_code == 200
+        assert resp.content == b"PK\x03\x04rebuilt"
+        db_session.refresh(artifact)
+        assert artifact.storage_path == str(rebuilt) and artifact.size_bytes == 11
+
+        # Second download is served from storage — no second rebuild.
+        assert client.get(f"/api/projects/{project.id}/chat/artifacts/{artifact.id}/download").status_code == 200
+        assert calls == [artifact.id]
+
+    def test_rebuild_failure_returns_a_readable_503(self, client, db_session, make_project, monkeypatch):
+        import app.routers.projects as projects_module
+
+        project = make_project()
+        artifact = self._missing(db_session, project, fmt="pdf")
+
+        async def _broken(a, **kw):
+            raise RuntimeError("docgen down")
+
+        monkeypatch.setattr(projects_module, "regenerate_artifact_file", _broken)
+        resp = client.get(f"/api/projects/{project.id}/chat/artifacts/{artifact.id}/download")
+        assert resp.status_code == 503
+        assert "try again" in resp.json()["detail"]
+
+
+def test_generated_files_go_to_gcs_in_production(monkeypatch, db_session):
+    import app.config
+    from app.services import upload_storage
+
+    app.config.get_settings().upload_storage = "gcs"
+    try:
+        assert upload_storage.generated_file_path("p", "a", "pdf") == "generated/p/a.pdf"
+    finally:
+        app.config.get_settings().upload_storage = "local"

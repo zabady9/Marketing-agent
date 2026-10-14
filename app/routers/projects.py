@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import PlainTextResponse, Response
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
@@ -31,6 +32,8 @@ from app.services.chat import (
     list_chat_messages,
     list_chat_sessions,
 )
+from app.services import upload_storage
+from app.services.artifact_generation import regenerate_artifact_file
 from app.services.chat_agent import run_chat_turn
 from app.services.export import build_report_markdown, synthesize_chat_export
 from app.services.project import (
@@ -202,15 +205,29 @@ def list_artifacts_endpoint(project_id: str, db: Session = Depends(get_db)) -> l
     return [ArtifactListItem.model_validate(a) for a in rows]
 
 
+def _content_disposition(filename: str) -> str:
+    # Same encoding Starlette's FileResponse uses: RFC 5987 for anything that
+    # isn't plain ASCII-safe (Arabic titles, spaces).
+    quoted = quote(filename)
+    if quoted != filename:
+        return f"attachment; filename*=utf-8''{quoted}"
+    return f'attachment; filename="{filename}"'
+
+
 @router.get("/{project_id}/chat/artifacts/{artifact_id}/download")
-def download_artifact_endpoint(
+async def download_artifact_endpoint(
     project_id: str, artifact_id: str, db: Session = Depends(get_db)
-) -> FileResponse:
-    """First binary-file endpoint in this codebase — every other file-serving
-    route here returns markdown text. Filters by both project_id and
-    artifact_id together (same IDOR-prevention pattern as
-    get_study_by_id_endpoint) and always derives the on-disk path/filename
-    from the Artifact row rather than any caller-supplied value."""
+) -> Response:
+    """Filters by both project_id and artifact_id together (same
+    IDOR-prevention pattern as get_study_by_id_endpoint) and always derives
+    the stored location/filename from the Artifact row rather than any
+    caller-supplied value.
+
+    If the file's bytes are gone — files stored on Cloud Run's local disk
+    before they moved to GCS were wiped by redeploys — it is rebuilt from
+    the outline saved with it, stored durably, and then served. That makes
+    the first download of such a file slow (seconds; up to minutes for a
+    presentation), and every later one instant."""
     artifact = (
         db.query(Artifact)
         .filter_by(id=artifact_id, project_id=project_id)
@@ -219,11 +236,31 @@ def download_artifact_endpoint(
     )
     if artifact is None:
         raise HTTPException(status_code=404, detail="Artifact not found")
-    download_name = _safe_download_filename(artifact.title, artifact.format)
-    return FileResponse(
-        artifact.storage_path,
+
+    data = await asyncio.to_thread(upload_storage.read_bytes, artifact.storage_path)
+    if data is None:
+        logger.info("Artifact %s missing from storage; regenerating from its outline", artifact.id)
+        try:
+            file = await regenerate_artifact_file(
+                artifact, presenton_api_key=get_settings().presenton_api_key
+            )
+        except Exception as exc:
+            logger.warning("Regenerating artifact %s failed: %s", artifact.id, exc, exc_info=True)
+            raise HTTPException(
+                status_code=503,
+                detail="This file is no longer stored and couldn't be rebuilt right now. Please try again later.",
+            ) from exc
+        artifact.storage_path = file.path
+        artifact.size_bytes = file.size_bytes
+        db.commit()
+        data = await asyncio.to_thread(upload_storage.read_bytes, file.path)
+        if data is None:
+            raise HTTPException(status_code=503, detail="The rebuilt file could not be read back.")
+
+    return Response(
+        content=data,
         media_type=_ARTIFACT_MIME_BY_FORMAT[artifact.format],
-        filename=download_name,
+        headers={"Content-Disposition": _content_disposition(_safe_download_filename(artifact.title, artifact.format))},
     )
 
 
