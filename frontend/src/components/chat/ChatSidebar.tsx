@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { saveChatArtifact } from '../../api'
+import { deleteArtifact, saveChatArtifact } from '../../api'
 import { formatDate, getStudyTitle } from '../../lib/format'
 import { FORMAT_ICON, FORMAT_LABEL, formatSize } from '../report/ArtifactCard'
 import type { ArtifactListItem, ChatSessionRecord, StudyResultResponse } from '../../types'
@@ -16,10 +16,28 @@ const STUDY_STATUS_DOT: Record<string, string> = {
   failed: 'bg-red-500',
 }
 
-function GeneratedFileRow({ projectId, file }: { projectId: string; file: ArtifactListItem }) {
-  const [state, setState] = useState<'idle' | 'downloading' | 'error'>('idle')
+function GeneratedFileRow({
+  projectId,
+  file,
+  onDeleted,
+}: {
+  projectId: string
+  file: ArtifactListItem
+  onDeleted: (id: string) => void
+}) {
+  const [state, setState] = useState<'idle' | 'downloading' | 'deleting' | 'error' | 'delete_error'>('idle')
+  const busy = state === 'downloading' || state === 'deleting'
+
+  function handleDelete() {
+    if (!window.confirm(`Remove "${file.title}" from generated files?`)) return
+    setState('deleting')
+    deleteArtifact(projectId, file.id)
+      .then(() => onDeleted(file.id))
+      .catch(() => setState('delete_error'))
+  }
+
   return (
-    <li>
+    <li className="group relative">
       <button
         type="button"
         onClick={() => {
@@ -28,8 +46,8 @@ function GeneratedFileRow({ projectId, file }: { projectId: string; file: Artifa
             .then(() => setState('idle'))
             .catch(() => setState('error'))
         }}
-        disabled={state === 'downloading'}
-        className="flex w-full items-start gap-2 rounded-md border border-transparent px-2.5 py-2 text-start text-xs text-gray-600 hover:bg-gray-50 disabled:opacity-60 transition-colors"
+        disabled={busy}
+        className="flex w-full items-start gap-2 rounded-md border border-transparent py-2 ps-2.5 pe-8 text-start text-xs text-gray-600 hover:bg-gray-50 disabled:opacity-60 transition-colors"
         title={`Download ${file.title} (${FORMAT_LABEL[file.format]})`}
       >
         <span className="shrink-0 leading-4" aria-hidden="true">{FORMAT_ICON[file.format]}</span>
@@ -38,11 +56,28 @@ function GeneratedFileRow({ projectId, file }: { projectId: string; file: Artifa
           <span className="block text-[10px] text-gray-400">
             {state === 'downloading'
               ? 'Downloading…'
-              : state === 'error'
-                ? <span className="text-red-500">Download failed, click to retry</span>
-                : `${file.format.toUpperCase()} · ${formatSize(file.size_bytes)} · ${formatDate(file.created_at)}`}
+              : state === 'deleting'
+                ? 'Removing…'
+                : state === 'error'
+                  ? <span className="text-red-500">Download failed, click to retry</span>
+                  : state === 'delete_error'
+                    ? <span className="text-red-500">Couldn't remove, try again</span>
+                    : `${file.format.toUpperCase()} · ${formatSize(file.size_bytes)} · ${formatDate(file.created_at)}`}
           </span>
         </span>
+      </button>
+      {/* Always visible on touch screens; on desktop it appears on hover/focus. */}
+      <button
+        type="button"
+        onClick={handleDelete}
+        disabled={busy}
+        aria-label={`Remove ${file.title}`}
+        title="Remove"
+        className="absolute end-1.5 top-1.5 rounded p-1 text-gray-400 hover:bg-red-50 hover:text-red-600 focus:opacity-100 disabled:opacity-40 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
+      >
+        <svg viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5" aria-hidden="true">
+          <path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z" />
+        </svg>
       </button>
     </li>
   )
@@ -58,6 +93,7 @@ export function ChatSidebar({
   sessions,
   studies,
   files,
+  onFileDeleted,
   open,
   onClose,
   onNewChat,
@@ -67,6 +103,7 @@ export function ChatSidebar({
   sessions: ChatSessionRecord[]
   studies: StudyResultResponse[]
   files: ArtifactListItem[]
+  onFileDeleted: (id: string) => void
   open: boolean
   onClose: () => void
   onNewChat: () => void
@@ -180,7 +217,7 @@ export function ChatSidebar({
             ) : (
               <ul className="space-y-1">
                 {files.map((file) => (
-                  <GeneratedFileRow key={file.id} projectId={projectId} file={file} />
+                  <GeneratedFileRow key={file.id} projectId={projectId} file={file} onDeleted={onFileDeleted} />
                 ))}
               </ul>
             )}

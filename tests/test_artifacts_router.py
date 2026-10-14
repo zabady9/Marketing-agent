@@ -156,3 +156,37 @@ def test_generated_files_go_to_gcs_in_production(monkeypatch, db_session):
         assert upload_storage.generated_file_path("p", "a", "pdf") == "generated/p/a.pdf"
     finally:
         app.config.get_settings().upload_storage = "local"
+
+
+class TestDeleteArtifactEndpoint:
+    def test_soft_deletes_and_hides_the_file(self, client, db_session, make_project):
+        project = make_project()
+        artifact = Artifact(
+            project_id=project.id, format="pdf", title="Old", filename="o.pdf",
+            storage_path="/nonexistent", size_bytes=1, spec_json={},
+        )
+        db_session.add(artifact)
+        db_session.commit()
+
+        resp = client.delete(f"/api/projects/{project.id}/chat/artifacts/{artifact.id}")
+
+        assert resp.status_code == 204
+        db_session.refresh(artifact)
+        assert artifact.deleted_at is not None  # kept, restorable
+        assert client.get(f"/api/projects/{project.id}/chat/artifacts").json() == []
+        assert client.get(f"/api/projects/{project.id}/chat/artifacts/{artifact.id}/download").status_code == 404
+        # Deleting again is a 404, not a second change.
+        assert client.delete(f"/api/projects/{project.id}/chat/artifacts/{artifact.id}").status_code == 404
+
+    def test_cannot_delete_another_projects_file(self, client, db_session, make_project):
+        owner, other = make_project(), make_project("Other")
+        artifact = Artifact(
+            project_id=owner.id, format="pdf", title="Mine", filename="m.pdf",
+            storage_path="/nonexistent", size_bytes=1, spec_json={},
+        )
+        db_session.add(artifact)
+        db_session.commit()
+
+        assert client.delete(f"/api/projects/{other.id}/chat/artifacts/{artifact.id}").status_code == 404
+        db_session.refresh(artifact)
+        assert artifact.deleted_at is None

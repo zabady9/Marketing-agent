@@ -480,6 +480,7 @@ export function ChatPage() {
           sessions={sessions}
           studies={studies}
           files={files}
+          onFileDeleted={(id) => setFiles((prev) => prev.filter((f) => f.id !== id))}
           open={sidebarOpen}
           onClose={() => setSidebarOpen(false)}
           onNewChat={handleNewChat}

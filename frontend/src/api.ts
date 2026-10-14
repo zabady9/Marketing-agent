@@ -140,6 +140,16 @@ export async function saveChatArtifact(projectId: string, artifact: ArtifactSumm
   URL.revokeObjectURL(url)
 }
 
+// Removes a generated file from the project (soft delete on the backend).
+export async function deleteArtifact(projectId: string, artifactId: string): Promise<void> {
+  const res = await fetch(`${BASE}/api/projects/${projectId}/chat/artifacts/${artifactId}`, {
+    method: 'DELETE',
+  })
+  if (!res.ok) {
+    throw new Error(await errorMessageFor(res))
+  }
+}
+
 function attachmentsUrl(projectId: string, sessionId: string): string {
   return `${BASE}/api/projects/${projectId}/chat/sessions/${sessionId}/attachments`
 }

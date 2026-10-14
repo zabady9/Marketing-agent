@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from datetime import datetime
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -203,6 +204,24 @@ def list_artifacts_endpoint(project_id: str, db: Session = Depends(get_db)) -> l
         .all()
     )
     return [ArtifactListItem.model_validate(a) for a in rows]
+
+
+@router.delete("/{project_id}/chat/artifacts/{artifact_id}", status_code=204)
+def delete_artifact_endpoint(project_id: str, artifact_id: str, db: Session = Depends(get_db)) -> Response:
+    """Soft delete (same as studies and chats): the file disappears from the
+    sidebar and can no longer be downloaded, but the row and the stored bytes
+    are kept, so an admin can restore it by clearing deleted_at."""
+    artifact = (
+        db.query(Artifact)
+        .filter_by(id=artifact_id, project_id=project_id)
+        .filter(Artifact.deleted_at.is_(None))
+        .one_or_none()
+    )
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    artifact.deleted_at = datetime.utcnow()
+    db.commit()
+    return Response(status_code=204)
 
 
 def _content_disposition(filename: str) -> str:
